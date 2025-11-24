@@ -651,20 +651,33 @@ INDEX_HTML = """
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <style>
-    :root { --bg:#0a0a0a; --bg2:#1a0000; --card:#141414; --text:#f3f4f6; --muted:#9ca3af; --border:#262626;
-            --accent:#ff3232; --accent-600:#cc2727; --amber:#f59e0b; --r:14px; --pad:14px; --gap:18px; --sh:0 10px 28px rgba(0,0,0,.7) }
+    :root {
+      --bg:#0a0a0a; --bg2:#1a0000; --card:#141414; --text:#f3f4f6; --muted:#9ca3af; --border:#262626;
+      --accent:#ff3232; --accent-600:#cc2727; --amber:#f59e0b; --r:14px; --pad:14px; --gap:18px; --sh:0 10px 28px rgba(0,0,0,.7)
+    }
     * { box-sizing:border-box }
     body { margin:0; background:linear-gradient(180deg,var(--bg),var(--bg2)); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial }
-    header { position:sticky; top:0; z-index:20; background:#0f0f0f; border-bottom:1px solid var(--border);
-             display:flex; align-items:center; gap:var(--gap); padding:var(--pad) calc(var(--pad)*1.5) }
+    header {
+      position:sticky; top:0; z-index:20; background:#0f0f0f; border-bottom:1px solid var(--border);
+      display:flex; align-items:center; gap:var(--gap); padding:var(--pad) calc(var(--pad)*1.5)
+    }
     .brand { display:flex; align-items:center; gap:10px; font-weight:800 }
     .brand svg { width:28px; height:28px }
     .hello { font-size:13px; color:var(--muted); }
-    main { padding:calc(var(--pad)*1.5); display:grid; grid-template-columns:minmax(360px,420px) 1fr; gap:var(--gap); align-items:start }
+    main {
+      padding:calc(var(--pad)*1.5);
+      display:grid;
+      grid-template-columns:minmax(360px,420px) 1fr;
+      gap:var(--gap);
+      align-items:start
+    }
     .card { background:var(--card); border:1px solid var(--border); border-radius:var(--r); padding:var(--pad); box-shadow:var(--sh) }
     h3 { margin:0 0 10px }
     label { display:block; font-size:12px; color:var(--muted); margin:8px 0 6px }
-    input, select, textarea { width:100%; display:block; padding:12px; border-radius:10px; border:1px solid var(--border); background:#0f0f0f; color:#f3f4f6; outline:none }
+    input, select, textarea {
+      width:100%; display:block; padding:12px; border-radius:10px;
+      border:1px solid var(--border); background:#0f0f0f; color:#f3f4f6; outline:none
+    }
     input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(255,50,50,.45) }
     button { padding:10px 14px; border:1px solid var(--border); background:#0f0f0f; color:#f3f4f6; border-radius:10px; cursor:pointer }
     button.primary { background:var(--accent); border-color:var(--accent); color:#fff }
@@ -685,10 +698,14 @@ INDEX_HTML = """
     @media (max-width:1100px) { .stats-wrap { grid-template-columns: 1fr } }
     .pill { padding:8px 10px; border:1px solid var(--border); border-radius:10px; background:#0f0f0f; width:auto; max-width:340px }
     .tooltray { display:flex; gap:8px; flex-wrap:wrap; align-items:center }
-    /* MODAL */
+
     .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.65); display:none; align-items:center; justify-content:center; z-index:50; }
     .modal { width:min(720px, 94vw); background:#141414; border:1px solid var(--border); border-radius:14px; padding:18px; box-shadow:0 20px 60px rgba(0,0,0,.6) }
     .modal header { position:static; background:transparent; border:0; padding:0 0 8px; display:flex; justify-content:space-between; align-items:center }
+
+    input[type="date"]::-webkit-calendar-picker-indicator {
+      filter: invert(1);
+    }
   </style>
 </head>
 <body>
@@ -710,7 +727,6 @@ INDEX_HTML = """
   </header>
 
   <main>
-    <!-- Kolumna boczna -->
     <section class="card">
       <h3>Pojazdy</h3>
       <div>
@@ -749,10 +765,6 @@ INDEX_HTML = """
 
       <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
         <button type="button" onclick="deleteSelectedVehicle()">Usuń wybrany</button>
-        <a href="/api/export/csv" onclick="if(!window.loggedIn){ alert('Najpierw zaloguj się.'); return false; }">Eksport CSV</a>
-        <label class="muted" style="font-size:12px;">
-          Import CSV: <input id="importCsv" type="file" accept=".csv" style="width:auto;display:inline" onchange="importCsvFile(event)">
-        </label>
       </div>
 
       <hr style="border-color:#262626; margin:16px 0;">
@@ -762,7 +774,6 @@ INDEX_HTML = """
       </div>
     </section>
 
-    <!-- Główna kolumna -->
     <section class="card">
       <div class="tooltray" style="justify-content:space-between;">
         <h3 style="margin:0;">Wpisy serwisowe</h3>
@@ -798,7 +809,6 @@ INDEX_HTML = """
     </section>
   </main>
 
-  <!-- STATYSTYKI -->
   <section class="card" style="margin:0 calc(var(--pad)*1.5) calc(var(--pad)*1.5);">
     <div class="tooltray" style="justify-content:space-between;">
       <h3 style="margin:0;">📊 Statystyki</h3>
@@ -836,7 +846,6 @@ INDEX_HTML = """
     </div>
   </section>
 
-  <!-- MODAL: Auth -->
   <div id="authModal" class="modal-backdrop" onclick="backdropClose(event)">
     <div class="modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
       <header>
@@ -856,7 +865,6 @@ INDEX_HTML = """
     </div>
   </div>
 
-  <!-- MODAL: Przypomnienia -->
   <div id="remindersModal" class="modal-backdrop" onclick="backdropClose(event)">
     <div class="modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
       <header>
@@ -898,7 +906,6 @@ INDEX_HTML = """
     </div>
   </div>
 
-  <!-- MODAL: Harmonogram -->
   <div id="schedulesModal" class="modal-backdrop" onclick="backdropClose(event)">
     <div class="modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
       <header>
@@ -935,7 +942,7 @@ INDEX_HTML = """
     window._entriesCache = [];
     let currentUserName = '';
 
-    // ====== Modal helpers ======
+    // ====== Modale ======
     function openAuthModal(){ $('authModal').style.display = 'flex'; }
     function closeAuthModal(){ $('authModal').style.display = 'none'; }
     function openReminders(){ $('remindersModal').style.display = 'flex'; loadReminders(); loadReminderVehicles(); }
@@ -944,7 +951,7 @@ INDEX_HTML = """
     function closeSchedules(){ $('schedulesModal').style.display = 'none'; }
     function backdropClose(e){ if(e.target.classList.contains('modal-backdrop')) e.target.style.display='none'; }
 
-    // ====== Marka/Model (rozszerzona baza) ======
+    // ====== Marka / model / rok / nr rejestracyjny ======
     const CAR_DATA = {
       "Audi": ["A1","A3","S3","RS3","A4","S4","RS4","A5","S5","RS5","A6","S6","RS6","A7","S7","RS7","A8","Q2","Q3","RSQ3","Q5","SQ5","Q7","SQ7","Q8","SQ8","RSQ8","TT","TTS","TTRS","e-tron","e-tron GT","RS e-tron GT"],
       "BMW": ["1 Series","M135i","2 Series","M240i","3 Series","M3","4 Series","M4","5 Series","M5","7 Series","X1","X3","X3 M","X5","X5 M","X6","X6 M","X7","i3","i4","i5","i7","iX"],
@@ -1032,10 +1039,10 @@ INDEX_HTML = """
     }
     function enforcePlate(el){ el.value = (el.value || '').toUpperCase().replace(/[^A-Z0-9]/g,''); }
 
-    // ====== TOAST ======
+    // ====== Toast ======
     function toast(msg){ const t = $('toast'); t.textContent = msg || '✓ Zapisano'; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 1600); }
 
-    // ====== KONTO ======
+    // ====== Konto ======
     async function register(){
       const email = $('regEmail').value || '', name = $('regName').value || '', pass = $('regPass').value || '';
       if(!email || !name || !pass) return alert('Uzupełnij e-mail, imię i hasło.');
@@ -1055,7 +1062,7 @@ INDEX_HTML = """
     }
     async function logout(){ try{ await api('/api/logout',{method:'POST'}) }catch(e){} window.loggedIn=false; location.reload(); }
 
-    // ====== POJAZDY ======
+    // ====== Pojazdy ======
     async function loadVehicles(){
       const list = await api('/api/vehicles');
       const sel = $('vehicleSelect'), rsel = $('r_vehicle'), ssel = $('s_vehicle');
@@ -1087,7 +1094,7 @@ INDEX_HTML = """
       toast('Usunięto pojazd'); await loadVehicles(); await loadStats(); await loadReminders(); await refreshEntries(); await loadSchedules();
     }
 
-    // ====== WPISY ======
+    // ====== Wpisy ======
     let editEntryId = null;
     async function addEntry(){
       const sel = $('vehicleSelect'); if(!sel.value) return alert('Najpierw dodaj pojazd.');
@@ -1140,19 +1147,10 @@ INDEX_HTML = """
       await loadStats();
     }
 
-    // Import CSV
-    async function importCsvFile(ev){
-      const f = ev.target.files && ev.target.files[0]; if(!f) return;
-      const fd = new FormData(); fd.append('file', f);
-      try{ await api('/api/import/csv', { method:'POST', body: fd }); toast('Zaimportowano'); await refreshEntries(); }catch(e){ alert('Import nieudany: ' + e.message); }
-      ev.target.value = '';
-    }
-
-    // ====== STATYSTYKI ======
-    // prosty plugin Chart.js: etykiety z wartościami na słupkach
+    // ====== Statystyki ======
     const BarValueLabels = {
       id: 'barValueLabels',
-      afterDatasetsDraw(chart, args, pluginOptions) {
+      afterDatasetsDraw(chart) {
         const {ctx} = chart;
         ctx.save();
         const ds = chart.getDatasetMeta(0);
@@ -1171,11 +1169,9 @@ INDEX_HTML = """
 
     async function loadStats(){
       try{
-        const s = await api('/api/stats'); // by_day (all), last_mileage, tco (zostawiamy total_cost)
-        // do sum per vehicle użyjemy wpisów:
-        const allEntries = await api('/api/entries'); // wszystkie wpisy b. użytkownika
+        const s = await api('/api/stats');
+        const allEntries = await api('/api/entries');
 
-        // Filtr zakresu dni dla wykresu:
         const range = parseInt(($('dash_range')?.value || '0'), 10);
         let byDay = s.by_day || [];
         if(range > 0 && byDay.length > 0){
@@ -1184,8 +1180,6 @@ INDEX_HTML = """
         }
         byDay.sort((a,b)=> (a.ymd < b.ymd ? -1 : 1));
         const labels = byDay.map(x => x.ymd);
-
-        // kolory słupków dopasowane do motywu (ciemny czerwony gradient)
         const ctx = $('chartCost')?.getContext('2d');
         let dataVals = byDay.map(x => Number(x.total_cost||0));
         if(ctx){
@@ -1205,10 +1199,8 @@ INDEX_HTML = """
           });
         }
 
-        // Suma kosztów per pojazd
         const sumsByVehicle = {};
         const labelsByVehicle = {};
-        // potrzebujemy mapy id->etykiety: pobierz listę pojazdów
         const vehicles = await api('/api/vehicles');
         vehicles.forEach(v => {
           const label = (v.make + ' ' + v.model + ' ' + (v.year||'') + (v.reg_plate?(' • '+v.reg_plate):'')).trim();
@@ -1220,7 +1212,6 @@ INDEX_HTML = """
             sumsByVehicle[e.vehicle_id] += Number(e.cost||0);
           }
         });
-        // render tabela
         const tBody = $('sumByVehicleTbody'); tBody.innerHTML = '';
         let grand = 0;
         Object.keys(sumsByVehicle).forEach(vid => {
@@ -1232,7 +1223,6 @@ INDEX_HTML = """
         });
         $('sumAll').textContent = grand.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2});
 
-        // Ostatnie przebiegi
         const tb = $('mileageTbody'); if(tb){ tb.innerHTML=''; (s.last_mileage||[]).forEach(r => {
           const tr = document.createElement('tr');
           tr.innerHTML = '<td>'+(r.label||'-')+'</td><td>'+Number(r.mileage||0).toLocaleString('pl-PL')+'</td>';
@@ -1241,7 +1231,7 @@ INDEX_HTML = """
       }catch(e){ console.error(e); }
     }
 
-    // ====== PRZYPOMNIENIA ======
+    // ====== Przypomnienia ======
     async function loadReminders(){
       try{
         const list = await api('/api/reminders');
@@ -1285,7 +1275,7 @@ INDEX_HTML = """
     async function completeReminder(id){ await api('/api/reminders/' + id, { method:'PUT', body: JSON.stringify({ completed_at: new Date().toISOString() }), headers:{'Content-Type':'application/json'} }); await loadReminders(); }
     async function deleteReminder(id){ await api('/api/reminders/' + id, { method:'DELETE' }); await loadReminders(); }
 
-    // ====== HARMONOGRAMY ======
+    // ====== Harmonogramy ======
     async function loadSchedules(){
       const tb = $('s_tbody'); if(!tb) return; tb.innerHTML='';
       const list = await api('/api/schedules');
@@ -1313,10 +1303,9 @@ INDEX_HTML = """
     }
     async function deleteSchedule(id){ await api('/api/schedules/' + id, { method:'DELETE' }); await loadSchedules(); }
 
-    // Init
+    // ====== Init ======
     document.addEventListener('DOMContentLoaded', () => { populateMakes(); populateYears(); });
 
-    // Export global
     Object.assign(window, {
       openAuthModal, closeAuthModal, openReminders, closeReminders, openSchedules, closeSchedules, backdropClose,
       register, login, logout,
@@ -1324,7 +1313,6 @@ INDEX_HTML = """
       addEntry, refreshEntries, delEntry, editEntry,
       loadStats, loadReminders, loadReminderVehicles,
       addReminder, completeReminder, deleteReminder,
-      importCsvFile,
       loadSchedules, addSchedule, deleteSchedule,
       onMakeChange, enforcePlate
     });
@@ -1332,6 +1320,7 @@ INDEX_HTML = """
 </body>
 </html>
 """
+
 
 
 @app.get("/")
