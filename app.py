@@ -628,6 +628,7 @@ INDEX_HTML = """
 <!doctype html>
 <html lang=pl>
 <head>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
   <meta charset=utf-8>
   <meta name=viewport content="width=device-width,initial-scale=1">
   <title>{APP_TITLE}</title>
@@ -811,7 +812,10 @@ INDEX_HTML = """
 
   <section class="card" style="margin:0 calc(var(--pad)*1.5) calc(var(--pad)*1.5);">
     <div class="tooltray" style="justify-content:space-between;">
-      <h3 style="margin:0;">📊 Statystyki</h3>
+      <h3 class="section-title">
+       <i class="bi bi-speedometer2" style="font-size: 1.4rem; margin-right: 8px;"></i>
+       Statystyki
+       </h3>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
         <label style="margin:0;align-self:center;">Zakres dni:</label>
         <select id="dash_range" onchange="loadStats()" style="max-width:220px;">
