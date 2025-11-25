@@ -30,7 +30,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 # --- Konfiguracja ---
 APP_TITLE = "e-Dziennik Serwisowy"
-UPLOAD_DIR = "/tmp/uploads" 
+UPLOAD_DIR = "/tmp/uploads"
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "pdf", "webp"}
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -38,10 +38,11 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=os.environ.get("EDZIENNIK_SECRET", "dev-secret-change-me"),
-    MAX_CONTENT_LENGTH=20 * 1024 * 1024,  
+    MAX_CONTENT_LENGTH=20 * 1024 * 1024,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=False,  
+    SESSION_COOKIE_SECURE=False,
 )
+
 
 def _normalize_db_url(url: str) -> str:
     if url.startswith("postgres://"):
@@ -49,6 +50,7 @@ def _normalize_db_url(url: str) -> str:
     elif url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
     return url
+
 
 DB_URL = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
 ENGINE = None
@@ -69,12 +71,15 @@ else:
         print("[DB] Błąd połączenia:", e)
         ENGINE = None
 
+
 def require_db():
     if ENGINE is None:
         raise RuntimeError("Brak połączenia z bazą (sprawdź DATABASE_URL).")
 
+
 def get_now_utc_iso():
     return datetime.utcnow().isoformat()
+
 
 def login_required(f):
     @wraps(f)
@@ -82,6 +87,7 @@ def login_required(f):
         if not session.get("user_id"):
             return jsonify({"error": "auth_required"}), 401
         return f(*args, **kwargs)
+
     return wrapper
 
 
@@ -149,6 +155,7 @@ CREATE TABLE IF NOT EXISTS service_schedules (
 );
 """
 
+
 def init_db():
     require_db()
     with ENGINE.begin() as conn:
@@ -156,6 +163,7 @@ def init_db():
             s = stmt.strip()
             if s:
                 conn.execute(text(s))
+
 
 @app.get("/api/health")
 def health():
@@ -166,8 +174,16 @@ def health():
             c.execute(text("SELECT 1"))
         return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e), "detail": getattr(e, "args", [""])[0] if e.args else ""}), 500
-
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(e),
+                    "detail": getattr(e, "args", [""])[0] if e.args else "",
+                }
+            ),
+            500,
+        )
 
 
 @app.post("/api/register")
@@ -182,7 +198,9 @@ def register():
             return jsonify({"error": "missing_fields"}), 400
         with ENGINE.begin() as conn:
             conn.execute(
-                text("INSERT INTO users(email,name,password_hash,created_at) VALUES (:e,:n,:ph,NOW())"),
+                text(
+                    "INSERT INTO users(email,name,password_hash,created_at) VALUES (:e,:n,:ph,NOW())"
+                ),
                 {"e": email, "n": name, "ph": generate_password_hash(password)},
             )
         return jsonify({"ok": True})
@@ -190,6 +208,7 @@ def register():
         if "unique" in str(e).lower():
             return jsonify({"error": "email_in_use"}), 400
         return jsonify({"error": "server_error", "detail": str(e)}), 500
+
 
 @app.post("/api/login")
 def login():
@@ -199,14 +218,33 @@ def login():
         email = (data.get("email") or "").strip().lower()
         password = data.get("password") or ""
         with ENGINE.begin() as conn:
-            row = conn.execute(text("SELECT id,name,email,password_hash FROM users WHERE email=:e"), {"e": email}).mappings().first()
+            row = (
+                conn.execute(
+                    text(
+                        "SELECT id,name,email,password_hash FROM users WHERE email=:e"
+                    ),
+                    {"e": email},
+                )
+                .mappings()
+                .first()
+            )
         if not row or not check_password_hash(row["password_hash"], password):
             return jsonify({"error": "invalid_credentials"}), 401
         session["user_id"] = int(row["id"])
         session["user_name"] = row["name"]
-        return jsonify({"ok": True, "user": {"id": row["id"], "name": row["name"], "email": row["email"]}})
+        return jsonify(
+            {
+                "ok": True,
+                "user": {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "email": row["email"],
+                },
+            }
+        )
     except Exception as e:
         return jsonify({"error": "server_error", "detail": str(e)}), 500
+
 
 @app.post("/api/logout")
 @login_required
@@ -217,16 +255,24 @@ def logout():
 
 # --- Vehicles ---
 
+
 @app.get("/api/vehicles")
 @login_required
 def list_vehicles():
     require_db()
     with ENGINE.begin() as conn:
-        rows = conn.execute(
-            text("SELECT * FROM vehicles WHERE owner_id=:uid ORDER BY created_at DESC"),
-            {"uid": session["user_id"]},
-        ).mappings().all()
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT * FROM vehicles WHERE owner_id=:uid ORDER BY created_at DESC"
+                ),
+                {"uid": session["user_id"]},
+            )
+            .mappings()
+            .all()
+        )
     return jsonify([dict(r) for r in rows])
+
 
 @app.post("/api/vehicles")
 @login_required
@@ -242,14 +288,28 @@ def add_vehicle():
         if not (make and model):
             return jsonify({"error": "missing_fields"}), 400
         with ENGINE.begin() as conn:
-            row = conn.execute(
-                text("INSERT INTO vehicles (owner_id,make,model,year,fuel,reg_plate,created_at) "
-                     "VALUES (:uid,:make,:model,:year,:fuel,:reg,NOW()) RETURNING id"),
-                {"uid": session["user_id"], "make": make, "model": model, "year": year, "fuel": fuel, "reg": reg},
-            ).mappings().first()
+            row = (
+                conn.execute(
+                    text(
+                        "INSERT INTO vehicles (owner_id,make,model,year,fuel,reg_plate,created_at) "
+                        "VALUES (:uid,:make,:model,:year,:fuel,:reg,NOW()) RETURNING id"
+                    ),
+                    {
+                        "uid": session["user_id"],
+                        "make": make,
+                        "model": model,
+                        "year": year,
+                        "fuel": fuel,
+                        "reg": reg,
+                    },
+                )
+                .mappings()
+                .first()
+            )
         return jsonify({"ok": True, "id": row["id"]})
     except Exception as e:
         return jsonify({"error": "server_error", "detail": str(e)}), 500
+
 
 @app.delete("/api/vehicles/<int:vehicle_id>")
 @login_required
@@ -264,6 +324,7 @@ def delete_vehicle(vehicle_id):
 
 
 # --- Service entries ---
+
 
 @app.get("/api/entries")
 @login_required
@@ -288,6 +349,7 @@ def list_entries():
         rows = conn.execute(text(sql), params).mappings().all()
     return jsonify([dict(r) for r in rows])
 
+
 @app.post("/api/entries")
 @login_required
 def add_entry():
@@ -298,7 +360,7 @@ def add_entry():
     except Exception:
         return jsonify({"error": "vehicle_id_required"}), 400
 
-    date_s = (data.get("date") or date.today().isoformat())
+    date_s = data.get("date") or date.today().isoformat()
     mileage = int(data.get("mileage") or 0)
     service_type = (data.get("service_type") or "").strip()
     description = (data.get("description") or "").strip()
@@ -319,11 +381,22 @@ def add_entry():
 
     with ENGINE.begin() as conn:
         conn.execute(
-            text("INSERT INTO service_entries (vehicle_id,date,mileage,service_type,description,cost,attachment,created_at) "
-                 "VALUES (:vid,:dt,:mil,:typ,:desc,:cost,:att,NOW())"),
-            {"vid": vehicle_id, "dt": date_s, "mil": mileage, "typ": service_type, "desc": description, "cost": cost, "att": attachment_name},
+            text(
+                "INSERT INTO service_entries (vehicle_id,date,mileage,service_type,description,cost,attachment,created_at) "
+                "VALUES (:vid,:dt,:mil,:typ,:desc,:cost,:att,NOW())"
+            ),
+            {
+                "vid": vehicle_id,
+                "dt": date_s,
+                "mil": mileage,
+                "typ": service_type,
+                "desc": description,
+                "cost": cost,
+                "att": attachment_name,
+            },
         )
     return jsonify({"ok": True, "attachment": attachment_name})
+
 
 @app.put("/api/entries/<int:entry_id>")
 @login_required
@@ -332,19 +405,22 @@ def update_entry(entry_id):
     data = request.get_json() or {}
     fields = []
     params = {"id": entry_id, "uid": session["user_id"]}
-    for key in ("date","mileage","service_type","description","cost"):
+    for key in ("date", "mileage", "service_type", "description", "cost"):
         if key in data:
             fields.append(f"{key}=:{key}")
             params[key] = data[key]
     if not fields:
         return jsonify({"error": "no_fields"}), 400
     sql = (
-        "UPDATE service_entries SET " + ",".join(fields) + ", updated_at=NOW() "
+        "UPDATE service_entries SET "
+        + ",".join(fields)
+        + ", updated_at=NOW() "
         "WHERE id=:id AND vehicle_id IN (SELECT id FROM vehicles WHERE owner_id=:uid)"
     )
     with ENGINE.begin() as conn:
         conn.execute(text(sql), params)
     return jsonify({"ok": True})
+
 
 @app.delete("/api/entries/<int:entry_id>")
 @login_required
@@ -352,28 +428,39 @@ def delete_entry(entry_id):
     require_db()
     with ENGINE.begin() as conn:
         conn.execute(
-            text("DELETE FROM service_entries WHERE id=:id AND vehicle_id IN (SELECT id FROM vehicles WHERE owner_id=:uid)"),
+            text(
+                "DELETE FROM service_entries WHERE id=:id AND vehicle_id IN (SELECT id FROM vehicles WHERE owner_id=:uid)"
+            ),
             {"id": entry_id, "uid": session["user_id"]},
         )
     return jsonify({"ok": True})
+
 
 @app.get("/uploads/<path:filename>")
 @login_required
 def get_upload(filename):
     return send_from_directory(UPLOAD_DIR, filename, as_attachment=False)
 
+
 # --- Reminders ---
+
 
 @app.get("/api/reminders")
 @login_required
 def list_reminders():
     require_db()
     with ENGINE.begin() as conn:
-        rows = conn.execute(
-            text("SELECT * FROM reminders WHERE user_id=:uid ORDER BY COALESCE(due_date, '9999-12-31') ASC, id DESC"),
-            {"uid": session["user_id"]},
-        ).mappings().all()
-    # flag is_due (jeśli data przeszła lub przebieg osiągnięty — prosty wariant)
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT * FROM reminders WHERE user_id=:uid ORDER BY COALESCE(due_date, '9999-12-31') ASC, id DESC"
+                ),
+                {"uid": session["user_id"]},
+            )
+            .mappings()
+            .all()
+        )
+    # flag is_due
     res = []
     for r in rows:
         is_due = False
@@ -381,6 +468,7 @@ def list_reminders():
             is_due = date.fromisoformat(str(r["due_date"])) <= date.today()
         res.append({**dict(r), "is_due": is_due})
     return jsonify(res)
+
 
 @app.post("/api/reminders")
 @login_required
@@ -392,8 +480,10 @@ def add_reminder():
         return jsonify({"error": "title_required"}), 400
     with ENGINE.begin() as conn:
         conn.execute(
-            text("INSERT INTO reminders (user_id,vehicle_id,title,due_date,due_mileage,notify_email,notify_before_days,created_at) "
-                 "VALUES (:uid,:vid,:title,:dd,:dm,:mail,:days,NOW())"),
+            text(
+                "INSERT INTO reminders (user_id,vehicle_id,title,due_date,due_mileage,notify_email,notify_before_days,created_at) "
+                "VALUES (:uid,:vid,:title,:dd,:dm,:mail,:days,NOW())"
+            ),
             {
                 "uid": session["user_id"],
                 "vid": d.get("vehicle_id"),
@@ -406,13 +496,21 @@ def add_reminder():
         )
     return jsonify({"ok": True})
 
+
 @app.put("/api/reminders/<int:rid>")
 @login_required
 def update_reminder(rid):
     require_db()
     d = request.get_json() or {}
     fields, params = [], {"rid": rid, "uid": session["user_id"]}
-    for key in ("title","due_date","due_mileage","notify_email","notify_before_days","completed_at"):
+    for key in (
+        "title",
+        "due_date",
+        "due_mileage",
+        "notify_email",
+        "notify_before_days",
+        "completed_at",
+    ):
         if key in d:
             fields.append(f"{key}=:{key}")
             params[key] = d[key]
@@ -423,27 +521,39 @@ def update_reminder(rid):
         conn.execute(text(sql), params)
     return jsonify({"ok": True})
 
+
 @app.delete("/api/reminders/<int:rid>")
 @login_required
 def delete_reminder(rid):
     require_db()
     with ENGINE.begin() as conn:
-        conn.execute(text("DELETE FROM reminders WHERE id=:rid AND user_id=:uid"), {"rid": rid, "uid": session["user_id"]})
+        conn.execute(
+            text("DELETE FROM reminders WHERE id=:rid AND user_id=:uid"),
+            {"rid": rid, "uid": session["user_id"]},
+        )
     return jsonify({"ok": True})
 
 
 # --- Harmonogram serwisów okresowych (pomysł #1) ---
+
 
 @app.get("/api/schedules")
 @login_required
 def list_schedules():
     require_db()
     with ENGINE.begin() as conn:
-        rows = conn.execute(
-            text("SELECT * FROM service_schedules WHERE user_id=:uid ORDER BY created_at DESC"),
-            {"uid": session["user_id"]},
-        ).mappings().all()
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT * FROM service_schedules WHERE user_id=:uid ORDER BY created_at DESC"
+                ),
+                {"uid": session["user_id"]},
+            )
+            .mappings()
+            .all()
+        )
     return jsonify([dict(r) for r in rows])
+
 
 @app.post("/api/schedules")
 @login_required
@@ -470,7 +580,26 @@ def add_schedule():
             month = base.month - 1 + interval_m
             year = base.year + month // 12
             month = month % 12 + 1
-            day = min(base.day, [31,29 if year%4==0 and (year%100!=0 or year%400==0) else 28,31,30,31,30,31,31,30,31,30,31][month-1])
+            day = min(
+                base.day,
+                [
+                    31,
+                    29
+                    if year % 4 == 0
+                    and (year % 100 != 0 or year % 400 == 0)
+                    else 28,
+                    31,
+                    30,
+                    31,
+                    30,
+                    31,
+                    31,
+                    30,
+                    31,
+                    30,
+                    31,
+                ][month - 1],
+            )
             next_date = date(year, month, day).isoformat()
         except Exception:
             next_date = None
@@ -483,18 +612,30 @@ def add_schedule():
             next_km = None
 
     with ENGINE.begin() as conn:
-        row = conn.execute(
-            text("""INSERT INTO service_schedules
+        row = (
+            conn.execute(
+                text(
+                    """INSERT INTO service_schedules
                     (user_id,vehicle_id,kind,interval_months,interval_km,last_service_date,last_service_mileage,next_due_date,next_due_mileage,created_at)
-                    VALUES (:uid,:vid,:kind,:im,:ik,:ld,:lm,:nd,:nk,NOW()) RETURNING *"""),
-            {
-                "uid": session["user_id"], "vid": d.get("vehicle_id"),
-                "kind": kind, "im": interval_m, "ik": interval_km,
-                "ld": last_date, "lm": last_mil,
-                "nd": next_date, "nk": next_km
-            },
-        ).mappings().first()
+                    VALUES (:uid,:vid,:kind,:im,:ik,:ld,:lm,:nd,:nk,NOW()) RETURNING *"""
+                ),
+                {
+                    "uid": session["user_id"],
+                    "vid": d.get("vehicle_id"),
+                    "kind": kind,
+                    "im": interval_m,
+                    "ik": interval_km,
+                    "ld": last_date,
+                    "lm": last_mil,
+                    "nd": next_date,
+                    "nk": next_km,
+                },
+            )
+            .mappings()
+            .first()
+        )
     return jsonify(dict(row))
+
 
 @app.put("/api/schedules/<int:sid>")
 @login_required
@@ -516,7 +657,26 @@ def update_schedule(sid):
             month = base.month - 1 + interval_m
             year = base.year + month // 12
             month = month % 12 + 1
-            day = min(base.day, [31,29 if year%4==0 and (year%100!=0 or year%400==0) else 28,31,30,31,30,31,31,30,31,30,31][month-1])
+            day = min(
+                base.day,
+                [
+                    31,
+                    29
+                    if year % 4 == 0
+                    and (year % 100 != 0 or year % 400 == 0)
+                    else 28,
+                    31,
+                    30,
+                    31,
+                    30,
+                    31,
+                    31,
+                    30,
+                    31,
+                    30,
+                    31,
+                ][month - 1],
+            )
             next_date = date(year, month, day).isoformat()
         except Exception:
             next_date = None
@@ -528,14 +688,23 @@ def update_schedule(sid):
             next_km = None
 
     fields, params = [], {"sid": sid, "uid": session["user_id"]}
-    for key in ("vehicle_id","kind","interval_months","interval_km","last_service_date","last_service_mileage"):
+    for key in (
+        "vehicle_id",
+        "kind",
+        "interval_months",
+        "interval_km",
+        "last_service_date",
+        "last_service_mileage",
+    ):
         if key in d:
             fields.append(f"{key}=:{key}")
             params[key] = d[key]
     if next_date is not None:
-        fields.append("next_due_date=:nd"); params["nd"] = next_date
+        fields.append("next_due_date=:nd")
+        params["nd"] = next_date
     if next_km is not None:
-        fields.append("next_due_mileage=:nk"); params["nk"] = next_km
+        fields.append("next_due_mileage=:nk")
+        params["nk"] = next_km
 
     if not fields:
         return jsonify({"error": "no_fields"}), 400
@@ -545,16 +714,21 @@ def update_schedule(sid):
         conn.execute(text(sql), params)
     return jsonify({"ok": True})
 
+
 @app.delete("/api/schedules/<int:sid>")
 @login_required
 def delete_schedule(sid):
     require_db()
     with ENGINE.begin() as conn:
-        conn.execute(text("DELETE FROM service_schedules WHERE id=:sid AND user_id=:uid"), {"sid": sid, "uid": session["user_id"]})
+        conn.execute(
+            text("DELETE FROM service_schedules WHERE id=:sid AND user_id=:uid"),
+            {"sid": sid, "uid": session["user_id"]},
+        )
     return jsonify({"ok": True})
 
 
 # --- Statystyki / TCO (pomysł #2) ---
+
 
 @app.get("/api/stats")
 @login_required
@@ -569,60 +743,101 @@ def stats():
     uid = session["user_id"]
     with ENGINE.begin() as conn:
         # koszty dziennie
-        by_day = conn.execute(text(
-            "SELECT TO_CHAR(date,'YYYY-MM-DD') AS ymd, COALESCE(SUM(cost),0) AS total_cost "
-            "FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id "
-            "WHERE v.owner_id=:uid GROUP BY 1 ORDER BY 1"
-        ), {"uid": uid}).mappings().all()
+        by_day = (
+            conn.execute(
+                text(
+                    "SELECT TO_CHAR(date,'YYYY-MM-DD') AS ymd, COALESCE(SUM(cost),0) AS total_cost "
+                    "FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id "
+                    "WHERE v.owner_id=:uid GROUP BY 1 ORDER BY 1"
+                ),
+                {"uid": uid},
+            )
+            .mappings()
+            .all()
+        )
 
         # ostatnie przebiegi per pojazd
-        last_mileage = conn.execute(text(
-            "SELECT v.id AS vehicle_id, (v.make || ' ' || v.model || ' ' || COALESCE(v.reg_plate,'')) AS label, "
-            "COALESCE(MAX(e.mileage),0) AS mileage "
-            "FROM vehicles v LEFT JOIN service_entries e ON e.vehicle_id=v.id "
-            "WHERE v.owner_id=:uid GROUP BY v.id, label ORDER BY label ASC"
-        ), {"uid": uid}).mappings().all()
+        last_mileage = (
+            conn.execute(
+                text(
+                    "SELECT v.id AS vehicle_id, (v.make || ' ' || v.model || ' ' || COALESCE(v.reg_plate,'')) AS label, "
+                    "COALESCE(MAX(e.mileage),0) AS mileage "
+                    "FROM vehicles v LEFT JOIN service_entries e ON e.vehicle_id=v.id "
+                    "WHERE v.owner_id=:uid GROUP BY v.id, label ORDER BY label ASC"
+                ),
+                {"uid": uid},
+            )
+            .mappings()
+            .all()
+        )
 
         # TCO: suma kosztów, km = (max mileage - min mileage) po wszystkich pojazdach, months = od najstarszego wpisu do dziś
-        total_cost = conn.execute(text(
-            "SELECT COALESCE(SUM(cost),0) FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id WHERE v.owner_id=:uid"
-        ), {"uid": uid}).scalar() or 0
+        total_cost = (
+            conn.execute(
+                text(
+                    "SELECT COALESCE(SUM(cost),0) FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id WHERE v.owner_id=:uid"
+                ),
+                {"uid": uid},
+            ).scalar()
+            or 0
+        )
 
-        mi = conn.execute(text(
-            "SELECT MIN(date) FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id WHERE v.owner_id=:uid"
-        ), {"uid": uid}).scalar()
+        mi = (
+            conn.execute(
+                text(
+                    "SELECT MIN(date) FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id WHERE v.owner_id=:uid"
+                ),
+                {"uid": uid},
+            ).scalar()
+        )
 
         # km: różnica max-min mileage na poziomie całej floty
-        min_mil = conn.execute(text(
-            "SELECT COALESCE(MIN(mileage),0) FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id WHERE v.owner_id=:uid AND mileage IS NOT NULL"
-        ), {"uid": uid}).scalar() or 0
-        max_mil = conn.execute(text(
-            "SELECT COALESCE(MAX(mileage),0) FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id WHERE v.owner_id=:uid AND mileage IS NOT NULL"
-        ), {"uid": uid}).scalar() or 0
+        min_mil = (
+            conn.execute(
+                text(
+                    "SELECT COALESCE(MIN(mileage),0) FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id WHERE v.owner_id=:uid AND mileage IS NOT NULL"
+                ),
+                {"uid": uid},
+            ).scalar()
+            or 0
+        )
+        max_mil = (
+            conn.execute(
+                text(
+                    "SELECT COALESCE(MAX(mileage),0) FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id WHERE v.owner_id=:uid AND mileage IS NOT NULL"
+                ),
+                {"uid": uid},
+            ).scalar()
+            or 0
+        )
         km = max(0, (max_mil - min_mil))
 
     months = 0
     if mi:
         d0 = mi if isinstance(mi, date) else date.fromisoformat(str(mi))
-        months = max(1, (date.today().year - d0.year) * 12 + (date.today().month - d0.month))
+        months = max(
+            1, (date.today().year - d0.year) * 12 + (date.today().month - d0.month)
+        )
 
     cost_per_km = float(total_cost) / km if km > 0 else None
     cost_per_month = float(total_cost) / months if months > 0 else None
 
-    return jsonify({
-        "by_day": [dict(r) for r in by_day],
-        "last_mileage": [dict(r) for r in last_mileage],
-        "tco": {
-            "total_cost": float(total_cost),
-            "months": months,
-            "km": km,
-            "cost_per_km": cost_per_km,
-            "cost_per_month": cost_per_month
+    return jsonify(
+        {
+            "by_day": [dict(r) for r in by_day],
+            "last_mileage": [dict(r) for r in last_mileage],
+            "tco": {
+                "total_cost": float(total_cost),
+                "months": months,
+                "km": km,
+                "cost_per_km": cost_per_km,
+                "cost_per_month": cost_per_month,
+            },
         }
-    })
+    )
 
 
-# --- FRONTEND (INDEX_HTML) ---# 
+# --- FRONTEND (INDEX_HTML) ---#
 
 INDEX_HTML = """
 <!doctype html>
@@ -764,14 +979,14 @@ INDEX_HTML = """
         <div style="margin-top:10px;"><button type="button" class="primary" onclick="addVehicle()">Dodaj pojazd</button></div>
       </div>
 
-      <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-        <button type="button" onclick="deleteSelectedVehicle()">Usuń wybrany</button>
-      </div>
-
       <hr style="border-color:#262626; margin:16px 0;">
       <div class="tooltray">
-        <button type="button" onclick="openReminders()">🔔 Przypomnienia</button>
-        <button type="button" onclick="openSchedules()">🛠️ Harmonogram</button>
+        <button type="button" onclick="openReminders()">
+          <i class="bi bi-bell-fill" style="margin-right:6px;"></i>Przypomnienia
+        </button>
+        <button type="button" onclick="openSchedules()">
+          <i class="bi bi-calendar2-week-fill" style="margin-right:6px;"></i>Harmonogram
+        </button>
       </div>
     </section>
 
@@ -781,6 +996,7 @@ INDEX_HTML = """
         <div style="display:flex; gap:8px; align-items:center;">
           <span class="muted" style="font-size:12px;">Aktualny pojazd:</span>
           <select id="vehicleSelect" class="pill" onchange="refreshEntries()"></select>
+          <button type="button" onclick="deleteSelectedVehicle()">Usuń wybrany</button>
         </div>
       </div>
 
@@ -829,7 +1045,7 @@ INDEX_HTML = """
 
     <div class="stats-wrap" style="margin-top:10px;">
       <div>
-        <h4 style="margin:0 0 8px">Koszty dziennie</h4>
+        <h4 style="margin:0 0 8px">Koszt wg pojazdu</h4>
         <canvas id="chartCost"></canvas>
       </div>
       <div>
@@ -945,6 +1161,34 @@ INDEX_HTML = """
     window.loggedIn = false;
     window._entriesCache = [];
     let currentUserName = '';
+
+    // ====== Kolory pojazdów ======
+    const VEHICLE_COLOR_PALETTE = [
+      '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6',
+      '#0ea5e9', '#6366f1', '#a855f7', '#ec4899', '#f97373',
+      '#fb923c', '#84cc16', '#22c55e', '#2dd4bf', '#38bdf8',
+      '#818cf8', '#a855f7', '#d946ef', '#f97373', '#f59e0b'
+    ];
+    const VEHICLE_COLORS = {};
+
+    function getVehicleColor(vid) {
+      if (!vid && vid !== 0) return '#9ca3af';
+      const key = String(vid);
+      if (!VEHICLE_COLORS[key]) {
+        const used = Object.keys(VEHICLE_COLORS).length;
+        const idx = used % VEHICLE_COLOR_PALETTE.length;
+        VEHICLE_COLORS[key] = VEHICLE_COLOR_PALETTE[idx];
+      }
+      return VEHICLE_COLORS[key];
+    }
+
+    // pomocnicza: sama data bez czasu
+    function onlyDate(value) {
+      if (!value) return '';
+      const s = value.toString();
+      if (s.length >= 10) return s.slice(0, 10);
+      return s;
+    }
 
     // ====== Modale ======
     function openAuthModal(){ $('authModal').style.display = 'flex'; }
@@ -1124,7 +1368,8 @@ INDEX_HTML = """
     function editEntry(id){
       const e = (window._entriesCache||[]).find(x => String(x.id) === String(id)); if(!e) return;
       editEntryId = id;
-      $('date').value = e.date || ''; $('mileage').value = e.mileage || '';
+      $('date').value = onlyDate(e.date) || '';
+      $('mileage').value = e.mileage || '';
       $('service_type').value = e.service_type || ''; $('description').value = e.description || ''; $('cost').value = e.cost || '';
       document.querySelector('button.primary').textContent = 'Zapisz zmiany';
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1138,9 +1383,13 @@ INDEX_HTML = """
       window._entriesCache = list; const tb = $('entriesTbody'); tb.innerHTML = '';
       list.forEach(e => {
         const tr = document.createElement('tr');
+        const dateStr = onlyDate(e.date);
+        const mileageStr = (e.mileage != null && e.mileage.toLocaleString)
+          ? e.mileage.toLocaleString("pl-PL")
+          : (e.mileage || '');
         tr.innerHTML =
-          '<td>'+e.date+'</td>' +
-          '<td>' + (e.mileage?.toLocaleString?.("pl-PL") || "") + '</td>' +
+          '<td>'+dateStr+'</td>' +
+          '<td>' + mileageStr + '</td>' +
           '<td>' + e.service_type + '</td>' +
           '<td>' + (e.description || "") + '</td>' +
           '<td>' + Number(e.cost||0).toLocaleString("pl-PL",{minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>' +
@@ -1175,63 +1424,102 @@ INDEX_HTML = """
       try{
         const s = await api('/api/stats');
         const allEntries = await api('/api/entries');
+        const vehicles = await api('/api/vehicles');
 
         const range = parseInt(($('dash_range')?.value || '0'), 10);
-        let byDay = s.by_day || [];
-        if(range > 0 && byDay.length > 0){
-          const cut = new Date(); cut.setDate(cut.getDate() - range + 1);
-          byDay = byDay.filter(x => { const d = new Date((x.ymd||'') + 'T00:00:00'); return !isNaN(d) && d >= cut; });
+        let cut = null;
+        if (range > 0) {
+          cut = new Date();
+          cut.setHours(0, 0, 0, 0);
+          cut.setDate(cut.getDate() - range + 1);
         }
-        byDay.sort((a,b)=> (a.ymd < b.ymd ? -1 : 1));
-        const labels = byDay.map(x => x.ymd);
+
+        // mapowanie id -> label pojazdu
+        const labelsByVehicle = {};
+        const sumsByVehicle = {};
+        vehicles.forEach(v => {
+          const label = (v.make + ' ' + v.model + ' ' + (v.year || '') + (v.reg_plate ? (' • ' + v.reg_plate) : '')).trim();
+          labelsByVehicle[v.id] = label || ('Pojazd #' + v.id);
+          sumsByVehicle[v.id] = 0;
+        });
+
+        // sumy kosztów per pojazd w zadanym zakresie dni
+        (allEntries || []).forEach(e => {
+          if (!labelsByVehicle[e.vehicle_id]) return;
+          if (cut) {
+            const d = new Date(e.date);
+            if (isNaN(d)) return;
+            d.setHours(0,0,0,0);
+            if (d < cut) return;
+          }
+          if (e.cost != null) {
+            sumsByVehicle[e.vehicle_id] += Number(e.cost || 0);
+          }
+        });
+
+        const vehicleIds = Object.keys(labelsByVehicle);
+
+        // ====== Wykres: koszt wg pojazdu (kolory per pojazd) ======
         const ctx = $('chartCost')?.getContext('2d');
-        let dataVals = byDay.map(x => Number(x.total_cost||0));
-        if(ctx){
-          const grad = ctx.createLinearGradient(0, 0, 0, 200);
-          grad.addColorStop(0, '#ff3b3b');
-          grad.addColorStop(1, '#7f1d1d');
+        if (ctx) {
+          const labels = vehicleIds.map(vid => labelsByVehicle[vid] || ('Pojazd #' + vid));
+          const dataVals = vehicleIds.map(vid => sumsByVehicle[vid] || 0);
+          const colors = vehicleIds.map(vid => getVehicleColor(vid));
 
           if(window._chartCost) window._chartCost.destroy();
           window._chartCost = new Chart(ctx, {
             type:'bar',
-            data:{ labels, datasets:[{ label:'Koszt (PLN) / dzień', data:dataVals, backgroundColor:grad, borderColor:'#cc2727', borderWidth:1 }]},
-            options:{ responsive:true, interaction:{ mode:'index', intersect:false },
-              scales:{ x:{ grid:{color:'#222'}, ticks:{color:'#f3f4f6', maxRotation:0, autoSkip:true} }, y:{ grid:{color:'#222'}, ticks:{color:'#f3f4f6'} } },
-              plugins:{ legend:{ labels:{ color:'#f3f4f6' } }, tooltip:{ callbacks:{ label:(c)=> ' ' + Number(c.raw||0).toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) + ' PLN' } } }
+            data:{
+              labels,
+              datasets:[{
+                label:'Koszt (PLN) / pojazd',
+                data:dataVals,
+                backgroundColor:colors,
+                borderColor:colors,
+                borderWidth:1
+              }]
+            },
+            options:{
+              responsive:true,
+              interaction:{ mode:'index', intersect:false },
+              scales:{
+                x:{ grid:{color:'#222'}, ticks:{color:'#f3f4f6', maxRotation:0, autoSkip:true} },
+                y:{ grid:{color:'#222'}, ticks:{color:'#f3f4f6'} }
+              },
+              plugins:{
+                legend:{ labels:{ color:'#f3f4f6' } },
+                tooltip:{ callbacks:{ label:(c)=> ' ' + Number(c.raw||0).toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) + ' PLN' } }
+              }
             },
             plugins:[BarValueLabels]
           });
         }
 
-        const sumsByVehicle = {};
-        const labelsByVehicle = {};
-        const vehicles = await api('/api/vehicles');
-        vehicles.forEach(v => {
-          const label = (v.make + ' ' + v.model + ' ' + (v.year||'') + (v.reg_plate?(' • '+v.reg_plate):'')).trim();
-          labelsByVehicle[v.id] = label || ('Pojazd #' + v.id);
-          sumsByVehicle[v.id] = 0;
-        });
-        (allEntries||[]).forEach(e => {
-          if(e.cost != null && labelsByVehicle[e.vehicle_id]) {
-            sumsByVehicle[e.vehicle_id] += Number(e.cost||0);
-          }
-        });
+        // ====== Tabela suma kosztów per pojazd (z kolorami) ======
         const tBody = $('sumByVehicleTbody'); tBody.innerHTML = '';
         let grand = 0;
-        Object.keys(sumsByVehicle).forEach(vid => {
+        vehicleIds.forEach(vid => {
           const sum = sumsByVehicle[vid] || 0;
           grand += sum;
+          const color = getVehicleColor(vid);
           const tr = document.createElement('tr');
-          tr.innerHTML = '<td>'+ (labelsByVehicle[vid]||('Pojazd #'+vid)) +'</td><td>'+ sum.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) +'</td>';
+          tr.style.borderLeft = '4px solid ' + color;
+          tr.innerHTML = '<td>'+ (labelsByVehicle[vid]||('Pojazd #'+vid)) +'</td><td>'+
+            sum.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) +'</td>';
           tBody.appendChild(tr);
         });
         $('sumAll').textContent = grand.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2});
 
-        const tb = $('mileageTbody'); if(tb){ tb.innerHTML=''; (s.last_mileage||[]).forEach(r => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td>'+(r.label||'-')+'</td><td>'+Number(r.mileage||0).toLocaleString('pl-PL')+'</td>';
-          tb.appendChild(tr);
-        })}
+        // ====== Tabela ostatnich przebiegów (również z kolorami) ======
+        const tb = $('mileageTbody'); if(tb){ tb.innerHTML='';
+          (s.last_mileage||[]).forEach(r => {
+            const color = getVehicleColor(r.vehicle_id);
+            const tr = document.createElement('tr');
+            tr.style.borderLeft = '4px solid ' + color;
+            tr.innerHTML = '<td>'+(r.label||'-')+'</td><td>'+Number(r.mileage||0).toLocaleString('pl-PL')+'</td>';
+            tb.appendChild(tr);
+          });
+        }
       }catch(e){ console.error(e); }
     }
 
@@ -1324,8 +1612,6 @@ INDEX_HTML = """
 </body>
 </html>
 """
-
-
 
 @app.get("/")
 def index_page():
