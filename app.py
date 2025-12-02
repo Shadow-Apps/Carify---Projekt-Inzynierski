@@ -1937,7 +1937,6 @@ INDEX_HTML = """
       window._entriesCache = list; const tb = $('entriesTbody'); tb.innerHTML = '';
       list.forEach(e => {
         const tr = document.createElement('tr');
-        const dateStr = formatDatePl(e.date);
         const mileageStr = (e.mileage != null && e.mileage.toLocaleString)
           ? e.mileage.toLocaleString("pl-PL")
           : (e.mileage || '');
