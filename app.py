@@ -1692,31 +1692,29 @@ INDEX_HTML = """
       return VEHICLE_COLORS[key];
     }
 
-    // ====== Daty / godziny po polsku ======
-    function onlyDate(value) {
+       // ====== Daty / godziny po polsku ======
+    function formatDatePl(value) {
       if (!value) return '';
-      const s = value.toString();
-      if (s.length >= 10) return s.slice(0, 10);
-      return s;
-    }
-        function formatDatePl(value) {
-      if (!value) return '';
-      // jeżeli przychodzi np. "Wed, 10 Dec 2025 ..." albo obiekt Date:
-      const d = new Date(value);
+    
+      const s = String(value).trim();
+    
+      // Spróbuj potraktować to jako datę JS
+      const d = new Date(s);
       if (!isNaN(d.getTime())) {
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return day + '.' + m + '.' + y; // DD.MM.RRRR
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return dd + '.' + mm + '.' + yyyy; // DD.MM.RRRR
       }
-      // jeżeli przychodzi "YYYY-MM-DD" jako tekst
-      const s = String(value);
+    
+      // Fallback: tekst w formacie YYYY-MM-DD
       if (s.length >= 10 && s[4] === '-' && s[7] === '-') {
-        const yy = s.slice(0, 4);
+        const yyyy = s.slice(0, 4);
         const mm = s.slice(5, 7);
         const dd = s.slice(8, 10);
-        return dd + '.' + mm + '.' + yy;
+        return dd + '.' + mm + '.' + yyyy;
       }
+    
       return s;
     }
     
@@ -1725,6 +1723,7 @@ INDEX_HTML = """
       const s = String(value);
       return s.slice(0, 5); // HH:MM
     }
+
 
     function pad2(n){ return n < 10 ? '0' + n : String(n); }
 
@@ -1930,33 +1929,47 @@ INDEX_HTML = """
     }
     async function delEntry(id){ if(!confirm('Usunąć wpis?')) return; await api('/api/entries/' + id, {method:'DELETE'}); toast('Usunięto'); refreshEntries(); }
     async function refreshEntries(){
-      const sel = $('vehicleSelect'); const currentVehicleId = sel.value || null;
-      const q = $('search').value || ''; const params = new URLSearchParams();
-      if(currentVehicleId) params.set('vehicle_id', currentVehicleId); if(q) params.set('q', q);
-      let list = []; try{ list = await api('/api/entries?' + params.toString()); }catch(e){ return; }
-      window._entriesCache = list; const tb = $('entriesTbody'); tb.innerHTML = '';
+      const sel = $('vehicleSelect'); 
+      const currentVehicleId = sel.value || null;
+      const q = $('search').value || ''; 
+      const params = new URLSearchParams();
+      if(currentVehicleId) params.set('vehicle_id', currentVehicleId); 
+      if(q) params.set('q', q);
+    
+      let list = []; 
+      try { 
+        list = await api('/api/entries?' + params.toString()); 
+      } catch(e){ 
+        return; 
+      }
+    
+      window._entriesCache = list; 
+      const tb = $('entriesTbody'); 
+      tb.innerHTML = '';
+    
       list.forEach(e => {
         const tr = document.createElement('tr');
-        const mileageStr = (e.mileage != null && e.mileage.toLocaleString)
+    
+        const formattedDate = formatDatePl(e.date);
+        const mileageFormatted = (e.mileage != null && e.mileage.toLocaleString)
           ? e.mileage.toLocaleString("pl-PL")
           : (e.mileage || '');
-        
-            const dateStr = formatDatePl(e.date);
-    const mileageStr = (e.mileage != null && e.mileage.toLocaleString)
-      ? e.mileage.toLocaleString("pl-PL")
-      : (e.mileage || '');
     
-    tr.innerHTML =
-      '<td>' + dateStr + '</td>' +
-      '<td>' + mileageStr + '</td>' +
-      '<td>' + e.service_type + '</td>' +
-      '<td>' + (e.description || "") + '</td>' +
-      '<td>' + Number(e.cost||0).toLocaleString("pl-PL",{minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>' +
-      '<td>' + (e.attachment ? ('<a target=_blank href="/uploads/' + e.attachment + '">plik</a>') : '') + '</td>' +
-      '<td class="actions"><button type="button" onclick="editEntry('+e.id+')">Edytuj</button> <button type="button" onclick="delEntry('+e.id+')">Usuń</button></td>';
-
+        tr.innerHTML =
+          '<td>'+ formattedDate +'</td>' +
+          '<td>'+ mileageFormatted +'</td>' +
+          '<td>'+ e.service_type +'</td>' +
+          '<td>'+ (e.description || "") +'</td>' +
+          '<td>'+ Number(e.cost||0).toLocaleString("pl-PL",{minimumFractionDigits:2, maximumFractionDigits:2}) +'</td>' +
+          '<td>'+ (e.attachment ? ('<a target=_blank href="/uploads/' + e.attachment + '">plik</a>') : '') +'</td>' +
+          '<td class="actions">' +
+            '<button type="button" onclick="editEntry('+e.id+')">Edytuj</button> ' +
+            '<button type="button" onclick="delEntry('+e.id+')">Usuń</button>' +
+          '</td>';
+    
         tb.appendChild(tr);
       });
+    
       await loadStats();
     }
 
