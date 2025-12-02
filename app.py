@@ -1726,7 +1726,6 @@ INDEX_HTML = """
       return s.slice(0, 5); // HH:MM
     }
 
-    }
     function pad2(n){ return n < 10 ? '0' + n : String(n); }
 
     // ====== Modale ======
