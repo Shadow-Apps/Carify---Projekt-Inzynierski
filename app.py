@@ -1699,19 +1699,33 @@ INDEX_HTML = """
       if (s.length >= 10) return s.slice(0, 10);
       return s;
     }
-    function formatDatePl(value) {
-      const dStr = onlyDate(value);
-      if (!dStr) return '';
-      const parts = dStr.split('-');
-      if (parts.length === 3) {
-        return parts[2] + '.' + parts[1] + '.' + parts[0];
+        function formatDatePl(value) {
+      if (!value) return '';
+      // jeżeli przychodzi np. "Wed, 10 Dec 2025 ..." albo obiekt Date:
+      const d = new Date(value);
+      if (!isNaN(d.getTime())) {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return day + '.' + m + '.' + y; // DD.MM.RRRR
       }
-      return dStr;
+      // jeżeli przychodzi "YYYY-MM-DD" jako tekst
+      const s = String(value);
+      if (s.length >= 10 && s[4] === '-' && s[7] === '-') {
+        const yy = s.slice(0, 4);
+        const mm = s.slice(5, 7);
+        const dd = s.slice(8, 10);
+        return dd + '.' + mm + '.' + yy;
+      }
+      return s;
     }
+    
     function formatTimeHm(value) {
       if (!value) return '';
       const s = String(value);
-      return s.slice(0,5);
+      return s.slice(0, 5); // HH:MM
+    }
+
     }
     function pad2(n){ return n < 10 ? '0' + n : String(n); }
 
@@ -1929,14 +1943,19 @@ INDEX_HTML = """
           ? e.mileage.toLocaleString("pl-PL")
           : (e.mileage || '');
         
-        tr.innerHTML =
-          '<td>'+dateStr+'</td>' +
-          '<td>' + mileageStr + '</td>' +
-          '<td>' + e.service_type + '</td>' +
-          '<td>' + (e.description || "") + '</td>' +
-          '<td>' + Number(e.cost||0).toLocaleString("pl-PL",{minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>' +
-          '<td>' + (e.attachment ? ('<a target=_blank href="/uploads/' + e.attachment + '">plik</a>') : '') + '</td>' +
-          '<td class="actions"><button type="button" onclick="editEntry('+e.id+')">Edytuj</button> <button type="button" onclick="delEntry('+e.id+')">Usuń</button></td>';
+            const dateStr = formatDatePl(e.date);
+    const mileageStr = (e.mileage != null && e.mileage.toLocaleString)
+      ? e.mileage.toLocaleString("pl-PL")
+      : (e.mileage || '');
+    
+    tr.innerHTML =
+      '<td>' + dateStr + '</td>' +
+      '<td>' + mileageStr + '</td>' +
+      '<td>' + e.service_type + '</td>' +
+      '<td>' + (e.description || "") + '</td>' +
+      '<td>' + Number(e.cost||0).toLocaleString("pl-PL",{minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>' +
+      '<td>' + (e.attachment ? ('<a target=_blank href="/uploads/' + e.attachment + '">plik</a>') : '') + '</td>' +
+      '<td class="actions"><button type="button" onclick="editEntry('+e.id+')">Edytuj</button> <button type="button" onclick="delEntry('+e.id+')">Usuń</button></td>';
 
         tb.appendChild(tr);
       });
