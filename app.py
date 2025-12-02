@@ -7,8 +7,7 @@ Funkcje:
 - Harmonogram serwisów okresowych (interwały mies./km + wyliczanie kolejnego terminu)
 - Statystyki/TCO + średnie spalanie
 - Tankowania (stacja, litry, cena za litr, przebieg, pełny bak)
-- Trasy (przejechane / planowane)
-- Eksport/Import CSV (do zrobienia osobno)
+- Trasy (przejechane / planowane, godziny, średnie spalanie)
 - Frontend single-file (INDEX_HTML) — czarno-czerwony motyw, marka/model z listy, paliwo zamiast VIN
 """
 
@@ -141,7 +140,7 @@ CREATE TABLE IF NOT EXISTS reminders (
     completed_at        TIMESTAMPTZ
 );
 
--- Harmonogramy serwisów okresowych (pomysł #1)
+-- Harmonogramy serwisów okresowych
 CREATE TABLE IF NOT EXISTS service_schedules (
     id                  BIGSERIAL PRIMARY KEY,
     user_id             BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -178,9 +177,12 @@ CREATE TABLE IF NOT EXISTS trips (
     vehicle_id      BIGINT NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
     start_date      DATE NOT NULL,
     end_date        DATE,
+    start_time      TIME,
+    end_time        TIME,
     start_location  TEXT,
     end_location    TEXT,
     distance_km     NUMERIC,
+    avg_consumption NUMERIC,
     planned         BOOLEAN NOT NULL DEFAULT FALSE,
     notes           TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -492,7 +494,7 @@ def list_reminders():
             .mappings()
             .all()
         )
-    # flag is_due
+    # flag is_due (prosta flaga)
     res = []
     for r in rows:
         is_due = False
@@ -566,7 +568,7 @@ def delete_reminder(rid):
     return jsonify({"ok": True})
 
 
-# --- Harmonogram serwisów okresowych (pomysł #1) ---
+# --- Harmonogram serwisów okresowych ---
 
 
 @app.get("/api/schedules")
@@ -821,7 +823,7 @@ def add_fuel_log():
     full_tank = bool(d.get("full_tank"))
 
     with ENGINE.begin() as conn:
-        # opcjonalna walidacja czy auto należy do usera
+        # walidacja właściciela
         owner_id = conn.execute(
             text("SELECT owner_id FROM vehicles WHERE id=:vid"),
             {"vid": vehicle_id},
@@ -858,9 +860,7 @@ def delete_fuel_log(fid):
     require_db()
     with ENGINE.begin() as conn:
         conn.execute(
-            text(
-                "DELETE FROM fuel_logs WHERE id=:fid AND user_id=:uid"
-            ),
+            text("DELETE FROM fuel_logs WHERE id=:fid AND user_id=:uid"),
             {"fid": fid, "uid": session["user_id"]},
         )
     return jsonify({"ok": True})
@@ -904,6 +904,8 @@ def add_trip():
 
     start_date = d.get("start_date") or date.today().isoformat()
     end_date = d.get("end_date") or None
+    start_time = d.get("start_time") or None
+    end_time = d.get("end_time") or None
     start_location = (d.get("start_location") or "").strip()
     end_location = (d.get("end_location") or "").strip()
     notes = (d.get("notes") or "").strip()
@@ -912,6 +914,11 @@ def add_trip():
         distance_km = float(d.get("distance_km") or 0) or None
     except Exception:
         distance_km = None
+
+    try:
+        avg_consumption = float(d.get("avg_consumption") or 0) or None
+    except Exception:
+        avg_consumption = None
 
     planned = bool(d.get("planned"))
 
@@ -927,8 +934,8 @@ def add_trip():
             text(
                 """
             INSERT INTO trips
-            (user_id,vehicle_id,start_date,end_date,start_location,end_location,distance_km,planned,notes,created_at)
-            VALUES (:uid,:vid,:sd,:ed,:sl,:el,:dist,:plan,:notes,NOW())
+            (user_id,vehicle_id,start_date,end_date,start_time,end_time,start_location,end_location,distance_km,avg_consumption,planned,notes,created_at)
+            VALUES (:uid,:vid,:sd,:ed,:st,:et,:sl,:el,:dist,:avg,:plan,:notes,NOW())
         """
             ),
             {
@@ -936,9 +943,12 @@ def add_trip():
                 "vid": vehicle_id,
                 "sd": start_date,
                 "ed": end_date,
+                "st": start_time,
+                "et": end_time,
                 "sl": start_location,
                 "el": end_location,
                 "dist": distance_km,
+                "avg": avg_consumption,
                 "plan": planned,
                 "notes": notes,
             },
@@ -958,7 +968,7 @@ def delete_trip(tid):
     return jsonify({"ok": True})
 
 
-# --- Statystyki / TCO (pomysł #2) ---
+# --- Statystyki / TCO ---
 
 
 @app.get("/api/stats")
@@ -966,20 +976,35 @@ def delete_trip(tid):
 def stats():
     """
     Zwraca:
-    - by_day: [{ymd, total_cost}]
+    - by_day: [{ymd, total_cost}]  (serwis + paliwo)
     - last_mileage: [{vehicle_id, label, mileage}]
     - tco: { total_cost, months, km, cost_per_km, cost_per_month }
     - fuel_stats: [{ vehicle_id, label, total_liters, distance_km, avg_l_100km }]
+    - daily_vehicle_costs: [{ymd, vehicle_id, label, service_cost, fuel_cost, total_cost}]
     """
     require_db()
     uid = session["user_id"]
     with ENGINE.begin() as conn:
-        # koszty dziennie (serwis)
-        by_day = (
+        # koszty dziennie serwis
+        by_day_service = (
             conn.execute(
                 text(
                     "SELECT TO_CHAR(date,'YYYY-MM-DD') AS ymd, COALESCE(SUM(cost),0) AS total_cost "
                     "FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id "
+                    "WHERE v.owner_id=:uid GROUP BY 1 ORDER BY 1"
+                ),
+                {"uid": uid},
+            )
+            .mappings()
+            .all()
+        )
+
+        # koszty dziennie paliwo
+        by_day_fuel = (
+            conn.execute(
+                text(
+                    "SELECT TO_CHAR(date,'YYYY-MM-DD') AS ymd, COALESCE(SUM(total_cost),0) AS total_cost "
+                    "FROM fuel_logs f JOIN vehicles v ON v.id=f.vehicle_id "
                     "WHERE v.owner_id=:uid GROUP BY 1 ORDER BY 1"
                 ),
                 {"uid": uid},
@@ -1003,8 +1028,8 @@ def stats():
             .all()
         )
 
-        # TCO: suma kosztów, km = (max mileage - min mileage) po wszystkich pojazdach, months = od najstarszego wpisu do dziś
-        total_cost = (
+        # TCO: suma kosztów serwis + paliwo
+        total_service_cost = (
             conn.execute(
                 text(
                     "SELECT COALESCE(SUM(cost),0) FROM service_entries e JOIN vehicles v ON v.id=e.vehicle_id WHERE v.owner_id=:uid"
@@ -1013,6 +1038,16 @@ def stats():
             ).scalar()
             or 0
         )
+        total_fuel_cost = (
+            conn.execute(
+                text(
+                    "SELECT COALESCE(SUM(total_cost),0) FROM fuel_logs f JOIN vehicles v ON v.id=f.vehicle_id WHERE v.owner_id=:uid"
+                ),
+                {"uid": uid},
+            ).scalar()
+            or 0
+        )
+        total_cost = float(total_service_cost) + float(total_fuel_cost)
 
         mi = (
             conn.execute(
@@ -1067,6 +1102,46 @@ def stats():
             .all()
         )
 
+        # dzienne koszty per auto (serwis + paliwo, rozbite)
+        daily_rows = (
+            conn.execute(
+                text(
+                    """
+            SELECT TO_CHAR(d,'YYYY-MM-DD') AS ymd,
+                   vehicle_id,
+                   label,
+                   SUM(service_cost) AS service_cost,
+                   SUM(fuel_cost) AS fuel_cost,
+                   SUM(service_cost + fuel_cost) AS total_cost
+            FROM (
+                SELECT e.date AS d,
+                       v.id AS vehicle_id,
+                       (v.make || ' ' || v.model || ' ' || COALESCE(v.reg_plate,'')) AS label,
+                       COALESCE(e.cost,0) AS service_cost,
+                       0::numeric AS fuel_cost
+                FROM service_entries e
+                JOIN vehicles v ON v.id=e.vehicle_id
+                WHERE v.owner_id=:uid
+                UNION ALL
+                SELECT f.date AS d,
+                       v.id AS vehicle_id,
+                       (v.make || ' ' || v.model || ' ' || COALESCE(v.reg_plate,'')) AS label,
+                       0::numeric AS service_cost,
+                       COALESCE(f.total_cost,0) AS fuel_cost
+                FROM fuel_logs f
+                JOIN vehicles v ON v.id=f.vehicle_id
+                WHERE v.owner_id=:uid
+            ) s
+            GROUP BY ymd, vehicle_id, label
+            ORDER BY ymd, label
+            """
+                ),
+                {"uid": uid},
+            )
+            .mappings()
+            .all()
+        )
+
     months = 0
     if mi:
         d0 = mi if isinstance(mi, date) else date.fromisoformat(str(mi))
@@ -1101,9 +1176,21 @@ def stats():
             }
         )
 
+    # scalone koszty dziennie (serwis + paliwo) - tylko suma per data
+    by_day_map = {}
+    for r in by_day_service:
+        y = r["ymd"]
+        by_day_map[y] = float(r["total_cost"] or 0)
+    for r in by_day_fuel:
+        y = r["ymd"]
+        by_day_map[y] = by_day_map.get(y, 0.0) + float(r["total_cost"] or 0)
+    by_day_combined = [
+        {"ymd": k, "total_cost": v} for k, v in sorted(by_day_map.items())
+    ]
+
     return jsonify(
         {
-            "by_day": [dict(r) for r in by_day],
+            "by_day": by_day_combined,
             "last_mileage": [dict(r) for r in last_mileage],
             "tco": {
                 "total_cost": float(total_cost),
@@ -1113,6 +1200,7 @@ def stats():
                 "cost_per_month": cost_per_month,
             },
             "fuel_stats": fuel_stats,
+            "daily_vehicle_costs": [dict(r) for r in daily_rows],
         }
     )
 
@@ -1152,7 +1240,12 @@ INDEX_HTML = """
       --accent:#ff3232; --accent-600:#cc2727; --amber:#f59e0b; --r:14px; --pad:14px; --gap:18px; --sh:0 10px 28px rgba(0,0,0,.7)
     }
     * { box-sizing:border-box }
-    body { margin:0; background:linear-gradient(180deg,var(--bg),var(--bg2)); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial }
+    body {
+      margin:0;
+      background:linear-gradient(180deg,var(--bg),var(--bg2));
+      color:var(--text);
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+    }
     header {
       position:sticky; top:0; z-index:20; background:#0f0f0f; border-bottom:1px solid var(--border);
       display:flex; align-items:center; gap:var(--gap); padding:var(--pad) calc(var(--pad)*1.5)
@@ -1169,13 +1262,18 @@ INDEX_HTML = """
     }
     .card { background:var(--card); border:1px solid var(--border); border-radius:var(--r); padding:var(--pad); box-shadow:var(--sh) }
     h3 { margin:0 0 10px }
+    h4 { margin:0 0 6px }
     label { display:block; font-size:12px; color:var(--muted); margin:8px 0 6px }
     input, select, textarea {
       width:100%; display:block; padding:12px; border-radius:10px;
-      border:1px solid var(--border); background:#0f0f0f; color:#f3f4f6; outline:none
+      border:1px solid var(--border); background:#0f0f0f; color:#f3f4f6; outline:none;
+      font-family:inherit;
     }
     input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(255,50,50,.45) }
-    button { padding:10px 14px; border:1px solid var(--border); background:#0f0f0f; color:#f3f4f6; border-radius:10px; cursor:pointer }
+    button {
+      padding:10px 14px; border:1px solid var(--border); background:#0f0f0f;
+      color:#f3f4f6; border-radius:10px; cursor:pointer; font-family:inherit;
+    }
     button.primary { background:var(--accent); border-color:var(--accent); color:#fff }
     button.primary:hover { background:var(--accent-600) }
     button.cta { background:var(--amber); color:#111; border-color:#a16207 }
@@ -1183,10 +1281,16 @@ INDEX_HTML = """
     a:hover { text-decoration:underline }
     .row { display:grid; grid-template-columns:1fr 1fr; gap:var(--gap) }
     @media (max-width:1100px) { main { grid-template-columns:1fr } .row { grid-template-columns:1fr } }
-    table { width:100%; border-collapse:collapse; background:#0f0f0f; border:1px solid var(--border); border-radius:var(--r); overflow:hidden }
+    table {
+      width:100%; border-collapse:collapse; background:#0f0f0f;
+      border:1px solid var(--border); border-radius:var(--r); overflow:hidden;
+      font-family:inherit;
+    }
     thead th { background:#1f1f1f; color:#ff9c9c }
-    th, td { padding:12px; border-bottom:1px solid var(--border); text-align:left; font-size:14px }
-    .actions { display:flex; gap:8px; flex-wrap:wrap }
+    th, td { padding:12px; border-bottom:1px solid var(--border); text-align:left; font-size:14px; font-family:inherit; }
+    td.actions {
+      display:flex; gap:8px; flex-wrap:wrap; border-bottom:none;
+    }
     .muted { color:var(--muted) }
     .toast { position:fixed; right:16px; bottom:16px; background:var(--accent); color:#fff; padding:10px 14px; border-radius:10px; display:none; box-shadow:var(--sh) }
     canvas { background:radial-gradient(ellipse at top,#151515,#0d0d0d); border:1px solid var(--border); border-radius:12px; padding:8px; max-height:320px }
@@ -1199,8 +1303,49 @@ INDEX_HTML = """
     .modal { width:min(720px, 94vw); background:#141414; border:1px solid var(--border); border-radius:14px; padding:18px; box-shadow:0 20px 60px rgba(0,0,0,.6) }
     .modal header { position:static; background:transparent; border:0; padding:0 0 8px; display:flex; justify-content:space-between; align-items:center }
 
-    input[type="date"]::-webkit-calendar-picker-indicator {
+    input[type="date"]::-webkit-calendar-picker-indicator,
+    input[type="time"]::-webkit-calendar-picker-indicator,
+    input[type="month"]::-webkit-calendar-picker-indicator {
       filter: invert(1);
+    }
+
+    .calendar-weekdays {
+      display:grid;
+      grid-template-columns:repeat(7,minmax(0,1fr));
+      gap:8px;
+      margin-top:4px;
+    }
+    .calendar-weekdays span {
+      font-size:11px;
+      text-align:center;
+      color:var(--muted);
+    }
+    .calendar-grid {
+      display:grid;
+      grid-template-columns:repeat(7,minmax(0,1fr));
+      gap:8px;
+      margin-top:8px;
+    }
+    .calendar-cell {
+      min-height:80px;
+      padding:6px 8px;
+      border-radius:10px;
+      border:1px solid var(--border);
+      background:#0f0f0f;
+      font-size:11px;
+    }
+    .calendar-cell .day-num {
+      font-weight:600;
+      margin-bottom:4px;
+    }
+    .calendar-cell .cost-total {
+      font-size:12px;
+      margin-bottom:4px;
+    }
+    .calendar-cell .entry {
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
     }
   </style>
 </head>
@@ -1305,69 +1450,72 @@ INDEX_HTML = """
       </div>
     </section>
 
-    <!-- Nowa karta: paliwo + trasy -->
+    <!-- Karta: paliwo -->
     <section class="card" style="grid-column:1 / span 2;">
-      <h3><i class="bi bi-fuel-pump-fill" style="margin-right:8px;"></i>Paliwo i trasy</h3>
-      <div class="row" style="margin-top:10px;">
-        <!-- Lewa kolumna: tankowania -->
-        <div>
-          <h4>Tankowania</h4>
-          <label>Pojazd</label>
-          <select id="fuel_vehicle" onchange="loadFuelLogs()"></select>
-          <div class="row">
-            <div><label>Data</label><input id="fuel_date" type="date"></div>
-            <div><label>Przebieg (km)</label><input id="fuel_odometer" type="number"></div>
-          </div>
-          <label>Stacja</label><input id="fuel_station" placeholder="np. Orlen, BP, Shell">
-          <div class="row">
-            <div><label>Litry</label><input id="fuel_liters" type="number" step="0.01"></div>
-            <div><label>Cena za litr (PLN)</label><input id="fuel_price" type="number" step="0.01"></div>
-          </div>
-          <label><input type="checkbox" id="fuel_full" style="width:auto;display:inline-block;margin-right:6px;"> Pełny bak</label>
-          <div style="margin-top:8px;"><button type="button" class="primary" onclick="addFuelLog()">Zapisz tankowanie</button></div>
+      <h3><i class="bi bi-fuel-pump-fill" style="margin-right:8px;"></i>Paliwo</h3>
+      <div style="margin-top:10px;">
+        <label>Pojazd</label>
+        <select id="fuel_vehicle" onchange="loadFuelLogs()"></select>
+        <div class="row">
+          <div><label>Data</label><input id="fuel_date" type="date"></div>
+          <div><label>Przebieg (km)</label><input id="fuel_odometer" type="number"></div>
+        </div>
+        <label>Stacja</label><input id="fuel_station" placeholder="np. Orlen, BP, Shell">
+        <div class="row">
+          <div><label>Litry</label><input id="fuel_liters" type="number" step="0.01"></div>
+          <div><label>Cena za litr (PLN)</label><input id="fuel_price" type="number" step="0.01"></div>
+        </div>
+        <label><input type="checkbox" id="fuel_full" style="width:auto;display:inline-block;margin-right:6px;"> Pełny bak</label>
+        <div style="margin-top:8px;"><button type="button" class="primary" onclick="addFuelLog()">Zapisz tankowanie</button></div>
 
-          <h4 style="margin-top:16px;">Historia tankowań</h4>
-          <div style="max-height:260px;overflow:auto;">
-            <table>
-              <thead><tr><th>Data</th><th>Stacja</th><th>Litry</th><th>PLN/l</th><th>Kwota</th><th>Przebieg</th><th>Pełny</th><th></th></tr></thead>
-              <tbody id="fuelTbody"></tbody>
-            </table>
-          </div>
-
-          <h4 style="margin-top:16px;">Średnie spalanie (z tankowań)</h4>
+        <h4 style="margin-top:16px;">Historia tankowań</h4>
+        <div style="max-height:260px;overflow:auto;">
           <table>
-            <thead><tr><th>Pojazd</th><th>Litry</th><th>Dystans (km)</th><th>Śr. l/100 km</th></tr></thead>
-            <tbody id="fuelSummaryTbody"></tbody>
+            <thead><tr><th>Data</th><th>Stacja</th><th>Litry</th><th>PLN/l</th><th>Kwota</th><th>Przebieg</th><th>Pełny</th><th></th></tr></thead>
+            <tbody id="fuelTbody"></tbody>
           </table>
         </div>
 
-        <!-- Prawa kolumna: trasy -->
-        <div>
-          <h4>Trasy</h4>
-          <label>Pojazd</label>
-          <select id="trip_vehicle" onchange="loadTrips()"></select>
-          <div class="row">
-            <div><label>Data startu</label><input id="trip_start_date" type="date"></div>
-            <div><label>Data końca (opcjonalnie)</label><input id="trip_end_date" type="date"></div>
-          </div>
-          <div class="row">
-            <div><label>Start (miejsce)</label><input id="trip_start_loc" placeholder="np. Warszawa"></div>
-            <div><label>Cel (miejsce)</label><input id="trip_end_loc" placeholder="np. Kraków"></div>
-          </div>
-          <div class="row">
-            <div><label>Dystans (km)</label><input id="trip_distance" type="number" step="0.1" placeholder="np. 300"></div>
-            <div><label><input type="checkbox" id="trip_planned" style="width:auto;display:inline-block;margin-right:6px;"> Planowana trasa</label></div>
-          </div>
-          <label>Notatki</label><textarea id="trip_notes" rows="3" placeholder="Np. autostrada A2, objazd, itp."></textarea>
-          <div style="margin-top:8px;"><button type="button" class="primary" onclick="addTrip()">Zapisz trasę</button></div>
+        <h4 style="margin-top:16px;">Średnie spalanie (z tankowań)</h4>
+        <table>
+          <thead><tr><th>Pojazd</th><th>Litry</th><th>Dystans (km)</th><th>Śr. l/100 km</th></tr></thead>
+          <tbody id="fuelSummaryTbody"></tbody>
+        </table>
+      </div>
+    </section>
 
-          <h4 style="margin-top:16px;">Lista tras</h4>
-          <div style="max-height:260px;overflow:auto;">
-            <table>
-              <thead><tr><th>Data</th><th>Trasa</th><th>Dystans (km)</th><th>Status</th><th></th></tr></thead>
-              <tbody id="tripTbody"></tbody>
-            </table>
-          </div>
+    <!-- Karta: trasy -->
+    <section class="card" style="grid-column:1 / span 2;">
+      <h3><i class="bi bi-geo-alt-fill" style="margin-right:8px;"></i>Trasy</h3>
+      <div style="margin-top:10px;">
+        <label>Pojazd</label>
+        <select id="trip_vehicle" onchange="loadTrips()"></select>
+        <div class="row">
+          <div><label>Data startu</label><input id="trip_start_date" type="date"></div>
+          <div><label>Data końca (opcjonalnie)</label><input id="trip_end_date" type="date"></div>
+        </div>
+        <div class="row">
+          <div><label>Godzina wyjazdu</label><input id="trip_start_time" type="time"></div>
+          <div><label>Godzina przyjazdu</label><input id="trip_end_time" type="time"></div>
+        </div>
+        <div class="row">
+          <div><label>Start (miejsce)</label><input id="trip_start_loc" placeholder="np. Warszawa"></div>
+          <div><label>Cel (miejsce)</label><input id="trip_end_loc" placeholder="np. Kraków"></div>
+        </div>
+        <div class="row">
+          <div><label>Dystans (km)</label><input id="trip_distance" type="number" step="0.1" placeholder="np. 300"></div>
+          <div><label>Średnie spalanie (l/100 km)</label><input id="trip_avg_consumption" type="number" step="0.1" placeholder="np. 7.5"></div>
+        </div>
+        <label><input type="checkbox" id="trip_planned" style="width:auto;display:inline-block;margin-right:6px;"> Planowana trasa</label>
+        <label>Notatki</label><textarea id="trip_notes" rows="3" placeholder="Np. autostrada A2, objazd, itp."></textarea>
+        <div style="margin-top:8px;"><button type="button" class="primary" onclick="addTrip()">Zapisz trasę</button></div>
+
+        <h4 style="margin-top:16px;">Lista tras</h4>
+        <div style="max-height:260px;overflow:auto;">
+          <table>
+            <thead><tr><th>Data</th><th>Trasa</th><th>Dystans (km)</th><th>Czas</th><th>Śr. l/100 km</th><th>Status</th><th></th></tr></thead>
+            <tbody id="tripTbody"></tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -1380,7 +1528,7 @@ INDEX_HTML = """
        Statystyki
        </h3>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-        <label style="margin:0;align-self:center;">Zakres dni (serwis):</label>
+        <label style="margin:0;align-self:center;">Zakres dni (dla wykresu):</label>
         <select id="dash_range" onchange="loadStats()" style="max-width:220px;">
           <option value="7">Ostatnie 7 dni</option>
           <option value="30" selected>Ostatnie 30 dni</option>
@@ -1410,6 +1558,20 @@ INDEX_HTML = """
           </table>
         </div>
       </div>
+    </div>
+
+    <div style="margin-top:16px;">
+      <h4 style="margin:0 0 8px">Kalendarium kosztów (serwis + paliwo)</h4>
+      <div class="tooltray" style="margin-bottom:8px;">
+        <div>
+          <label style="margin:0 8px 0 0; font-size:12px;">Miesiąc:</label>
+          <input type="month" id="cal_month" onchange="renderCostCalendar()" style="max-width:180px;">
+        </div>
+      </div>
+      <div class="calendar-weekdays">
+        <span>Pn</span><span>Wt</span><span>Śr</span><span>Cz</span><span>Pt</span><span>Sb</span><span>Nd</span>
+      </div>
+      <div id="calendarGrid" class="calendar-grid"></div>
     </div>
   </section>
 
@@ -1507,6 +1669,7 @@ INDEX_HTML = """
     const $ = (id) => document.getElementById(id);
     window.loggedIn = false;
     window._entriesCache = [];
+    window._dailyVehicleCosts = [];
     let currentUserName = '';
 
     // ====== Kolory pojazdów ======
@@ -1519,7 +1682,7 @@ INDEX_HTML = """
     const VEHICLE_COLORS = {};
 
     function getVehicleColor(vid) {
-      if (!vid && vid !== 0) return '#9ca3af';
+      if (vid === null || vid === undefined) return '#9ca3af';
       const key = String(vid);
       if (!VEHICLE_COLORS[key]) {
         const used = Object.keys(VEHICLE_COLORS).length;
@@ -1529,13 +1692,28 @@ INDEX_HTML = """
       return VEHICLE_COLORS[key];
     }
 
-    // pomocnicza: sama data bez czasu
+    // ====== Daty / godziny po polsku ======
     function onlyDate(value) {
       if (!value) return '';
       const s = value.toString();
       if (s.length >= 10) return s.slice(0, 10);
       return s;
     }
+    function formatDatePl(value) {
+      const dStr = onlyDate(value);
+      if (!dStr) return '';
+      const parts = dStr.split('-');
+      if (parts.length === 3) {
+        return parts[2] + '.' + parts[1] + '.' + parts[0];
+      }
+      return dStr;
+    }
+    function formatTimeHm(value) {
+      if (!value) return '';
+      const s = String(value);
+      return s.slice(0,5);
+    }
+    function pad2(n){ return n < 10 ? '0' + n : String(n); }
 
     // ====== Modale ======
     function openAuthModal(){ $('authModal').style.display = 'flex'; }
@@ -1746,7 +1924,7 @@ INDEX_HTML = """
       window._entriesCache = list; const tb = $('entriesTbody'); tb.innerHTML = '';
       list.forEach(e => {
         const tr = document.createElement('tr');
-        const dateStr = onlyDate(e.date);
+        const dateStr = formatDatePl(e.date);
         const mileageStr = (e.mileage != null && e.mileage.toLocaleString)
           ? e.mileage.toLocaleString("pl-PL")
           : (e.mileage || '');
@@ -1777,7 +1955,7 @@ INDEX_HTML = """
       list.forEach(f => {
         const tr = document.createElement('tr');
         tr.innerHTML =
-          '<td>'+ onlyDate(f.date) +'</td>' +
+          '<td>'+ formatDatePl(f.date) +'</td>' +
           '<td>'+ (f.station || '') +'</td>' +
           '<td>'+ (f.liters != null ? Number(f.liters).toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) : '') +'</td>' +
           '<td>'+ (f.price_per_liter != null ? Number(f.price_per_liter).toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) : '') +'</td>' +
@@ -1824,15 +2002,19 @@ INDEX_HTML = """
       const tb = $('tripTbody'); if(!tb) return;
       tb.innerHTML = '';
       list.forEach(t => {
-        const dateStr = onlyDate(t.start_date) + (t.end_date ? ' - ' + onlyDate(t.end_date) : '');
+        const dateStr = formatDatePl(t.start_date) + (t.end_date ? ' - ' + formatDatePl(t.end_date) : '');
         const route = (t.start_location || '') + (t.end_location ? ' → ' + t.end_location : '');
         const dist = (t.distance_km != null ? Number(t.distance_km).toLocaleString('pl-PL',{maximumFractionDigits:1}) : '');
+        const timeRange = (formatTimeHm(t.start_time) || '') + (t.end_time ? ('–' + formatTimeHm(t.end_time)) : '');
+        const avg = (t.avg_consumption != null ? Number(t.avg_consumption).toLocaleString('pl-PL',{minimumFractionDigits:1, maximumFractionDigits:1}) : '');
         const status = t.planned ? 'planowana' : 'zrealizowana';
         const tr = document.createElement('tr');
         tr.innerHTML =
           '<td>'+dateStr+'</td>' +
           '<td>'+route+'</td>' +
           '<td>'+dist+'</td>' +
+          '<td>'+timeRange+'</td>' +
+          '<td>'+avg+'</td>' +
           '<td>'+status+'</td>' +
           '<td class="actions"><button type="button" onclick="deleteTrip('+t.id+')">Usuń</button></td>';
         tb.appendChild(tr);
@@ -1845,17 +2027,21 @@ INDEX_HTML = """
         vehicle_id: vid,
         start_date: $('trip_start_date').value || null,
         end_date: $('trip_end_date').value || null,
+        start_time: $('trip_start_time').value || null,
+        end_time: $('trip_end_time').value || null,
         start_location: $('trip_start_loc').value || null,
         end_location: $('trip_end_loc').value || null,
         distance_km: $('trip_distance').value || null,
+        avg_consumption: $('trip_avg_consumption').value || null,
         planned: $('trip_planned').checked,
         notes: $('trip_notes').value || null
       };
       await api('/api/trips', { method:'POST', body: JSON.stringify(body), headers:{'Content-Type':'application/json'} });
       toast('Zapisano trasę');
       $('trip_start_date').value=''; $('trip_end_date').value='';
+      $('trip_start_time').value=''; $('trip_end_time').value='';
       $('trip_start_loc').value=''; $('trip_end_loc').value='';
-      $('trip_distance').value=''; $('trip_planned').checked=false; $('trip_notes').value='';
+      $('trip_distance').value=''; $('trip_avg_consumption').value=''; $('trip_planned').checked=false; $('trip_notes').value='';
       await loadTrips();
     }
     async function deleteTrip(id){
@@ -1888,41 +2074,34 @@ INDEX_HTML = """
     async function loadStats(){
       try{
         const s = await api('/api/stats');
-        const allEntries = await api('/api/entries');
-        const vehicles = await api('/api/vehicles');
+        window._dailyVehicleCosts = s.daily_vehicle_costs || [];
 
         const range = parseInt(($('dash_range')?.value || '0'), 10);
-        let cut = null;
+        let cutoff = null;
         if (range > 0) {
-          cut = new Date();
-          cut.setHours(0, 0, 0, 0);
-          cut.setDate(cut.getDate() - range + 1);
+          cutoff = new Date();
+          cutoff.setHours(0,0,0,0);
+          cutoff.setDate(cutoff.getDate() - range + 1);
         }
 
-        // mapowanie id -> label pojazdu
-        const labelsByVehicle = {};
         const sumsByVehicle = {};
-        vehicles.forEach(v => {
-          const label = (v.make + ' ' + v.model + ' ' + (v.year || '') + (v.reg_plate ? (' • ' + v.reg_plate) : '')).trim();
-          labelsByVehicle[v.id] = label || ('Pojazd #' + v.id);
-          sumsByVehicle[v.id] = 0;
-        });
-
-        // sumy kosztów per pojazd w zadanym zakresie dni (serwis)
-        (allEntries || []).forEach(e => {
-          if (!labelsByVehicle[e.vehicle_id]) return;
-          if (cut) {
-            const d = new Date(e.date);
+        const labelsByVehicle = {};
+        (window._dailyVehicleCosts || []).forEach(row => {
+          const d = new Date(row.ymd + 'T00:00:00');
+          if (cutoff) {
             if (isNaN(d)) return;
             d.setHours(0,0,0,0);
-            if (d < cut) return;
+            if (d < cutoff) return;
           }
-          if (e.cost != null) {
-            sumsByVehicle[e.vehicle_id] += Number(e.cost || 0);
-          }
+          const vid = row.vehicle_id;
+          const label = row.label || ('Pojazd #' + vid);
+          labelsByVehicle[vid] = label;
+          sumsByVehicle[vid] = (sumsByVehicle[vid] || 0) + Number(row.total_cost || 0);
         });
 
-        const vehicleIds = Object.keys(labelsByVehicle);
+        const vehicleIds = Object.keys(labelsByVehicle).sort((a,b) => {
+          return (labelsByVehicle[a]||'').localeCompare(labelsByVehicle[b]||'', 'pl');
+        });
 
         // ====== Wykres: koszt wg pojazdu (kolory per pojazd) ======
         const ctx = $('chartCost')?.getContext('2d');
@@ -2010,7 +2189,94 @@ INDEX_HTML = """
           });
         }
 
+        // ====== Kalendarz kosztów ======
+        const monthInput = $('cal_month');
+        if (monthInput && !monthInput.value) {
+          const now = new Date();
+          monthInput.value = now.toISOString().slice(0,7);
+        }
+        renderCostCalendar();
+
       }catch(e){ console.error(e); }
+    }
+
+    function renderCostCalendar(){
+      const grid = $('calendarGrid');
+      if(!grid) return;
+      grid.innerHTML = '';
+      const data = window._dailyVehicleCosts || [];
+      if (!data.length) return;
+
+      const monthInput = $('cal_month');
+      let year, month;
+      if (monthInput && monthInput.value) {
+        const parts = monthInput.value.split('-');
+        year = parseInt(parts[0],10);
+        month = parseInt(parts[1],10);
+      } else {
+        const now = new Date();
+        year = now.getFullYear();
+        month = now.getMonth() + 1;
+      }
+
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const firstDay = new Date(year, month-1, 1);
+      // JS: 0=niedziela, my chcemy 0=poniedziałek
+      let offset = (firstDay.getDay() + 6) % 7;
+
+      const byDate = {};
+      data.forEach(row => {
+        const ymd = row.ymd;
+        if(!ymd) return;
+        const d = new Date(ymd + 'T00:00:00');
+        if (isNaN(d)) return;
+        if (d.getFullYear() !== year || (d.getMonth()+1) !== month) return;
+        if(!byDate[ymd]) byDate[ymd] = [];
+        byDate[ymd].push(row);
+      });
+
+      for(let i=0;i<offset;i++){
+        const empty = document.createElement('div');
+        empty.className = 'calendar-cell';
+        grid.appendChild(empty);
+      }
+
+      for(let day=1; day<=daysInMonth; day++){
+        const ymd = year + '-' + pad2(month) + '-' + pad2(day);
+        const rows = byDate[ymd] || [];
+        const totalForDay = rows.reduce((s,r) => s + Number(r.total_cost || 0), 0);
+        const cell = document.createElement('div');
+        cell.className = 'calendar-cell';
+
+        const dayNum = document.createElement('div');
+        dayNum.className = 'day-num';
+        dayNum.textContent = day;
+        cell.appendChild(dayNum);
+
+        if (totalForDay > 0) {
+          const totalDiv = document.createElement('div');
+          totalDiv.className = 'cost-total';
+          totalDiv.textContent = 'Razem: ' + totalForDay.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) + ' zł';
+          cell.appendChild(totalDiv);
+
+          rows.forEach(r => {
+            const entry = document.createElement('div');
+            entry.className = 'entry';
+            const service = Number(r.service_cost || 0);
+            const fuel = Number(r.fuel_cost || 0);
+            let details = '';
+            if (service > 0) details += 'serwis ' + service.toLocaleString('pl-PL',{maximumFractionDigits:2}) + ' zł';
+            if (fuel > 0) {
+              if (details) details += ', ';
+              details += 'paliwo ' + fuel.toLocaleString('pl-PL',{maximumFractionDigits:2}) + ' zł';
+            }
+            entry.textContent = '• ' + (r.label || '-') + ' — ' + details;
+            cell.appendChild(entry);
+          });
+        }
+
+        grid.appendChild(cell);
+      }
     }
 
     // ====== Przypomnienia ======
@@ -2022,8 +2288,12 @@ INDEX_HTML = """
           const tr = document.createElement('tr');
           const due = r.is_due ? '🔔' : '';
           tr.innerHTML =
-            '<td>' + due + '</td><td>' + r.title + '</td><td>' + (r.due_date||'') + '</td><td>' + (r.due_mileage||'') + '</td>' +
-            '<td>' + (r.notify_email ? 'tak' : 'nie') + '</td><td>' + (r.notify_before_days ?? '') + '</td>' +
+            '<td>' + due + '</td>' +
+            '<td>' + r.title + '</td>' +
+            '<td>' + (r.due_date ? formatDatePl(r.due_date) : '') + '</td>' +
+            '<td>' + (r.due_mileage||'') + '</td>' +
+            '<td>' + (r.notify_email ? 'tak' : 'nie') + '</td>' +
+            '<td>' + (r.notify_before_days ?? '') + '</td>' +
             '<td>' + (r.vehicle_id || '') + '</td>' +
             '<td class="actions"><button type="button" onclick="completeReminder(' + r.id + ')">Zakończ</button> <button type="button" onclick="deleteReminder(' + r.id + ')">Usuń</button></td>';
           tb.appendChild(tr);
@@ -2063,7 +2333,7 @@ INDEX_HTML = """
       const list = await api('/api/schedules');
       list.forEach(s => {
         const inter = [(s.interval_months? (s.interval_months+' mies.'):'') , (s.interval_km? (s.interval_km+' km'):'')].filter(Boolean).join(' / ') || '-';
-        const next = (s.next_due_date || s.next_due_mileage || '-') ;
+        const next = (s.next_due_date ? formatDatePl(s.next_due_date) : (s.next_due_mileage || '-'));
         const tr = document.createElement('tr');
         tr.innerHTML = '<td>'+s.kind+'</td><td>'+inter+'</td><td>'+next+'</td><td>'+(s.vehicle_id||'')+'</td>' +
                        '<td class="actions"><button type="button" onclick="deleteSchedule('+s.id+')">Usuń</button></td>';
@@ -2098,7 +2368,8 @@ INDEX_HTML = """
       loadSchedules, addSchedule, deleteSchedule,
       onMakeChange, enforcePlate,
       loadFuelLogs, addFuelLog, deleteFuelLog,
-      loadTrips, addTrip, deleteTrip
+      loadTrips, addTrip, deleteTrip,
+      renderCostCalendar
     });
   </script>
 </body>
