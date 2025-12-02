@@ -1928,6 +1928,7 @@ INDEX_HTML = """
         const mileageStr = (e.mileage != null && e.mileage.toLocaleString)
           ? e.mileage.toLocaleString("pl-PL")
           : (e.mileage || '');
+        
         tr.innerHTML =
           '<td>'+dateStr+'</td>' +
           '<td>' + mileageStr + '</td>' +
@@ -1936,6 +1937,7 @@ INDEX_HTML = """
           '<td>' + Number(e.cost||0).toLocaleString("pl-PL",{minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>' +
           '<td>' + (e.attachment ? ('<a target=_blank href="/uploads/' + e.attachment + '">plik</a>') : '') + '</td>' +
           '<td class="actions"><button type="button" onclick="editEntry('+e.id+')">Edytuj</button> <button type="button" onclick="delEntry('+e.id+')">Usuń</button></td>';
+
         tb.appendChild(tr);
       });
       await loadStats();
