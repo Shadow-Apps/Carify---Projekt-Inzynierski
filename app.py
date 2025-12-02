@@ -5,8 +5,10 @@ Funkcje:
 - Rejestracja/logowanie (sesja cookie)
 - Pojazdy (z paliwem), wpisy serwisowe, przypomnienia
 - Harmonogram serwisów okresowych (interwały mies./km + wyliczanie kolejnego terminu)
-- Statystyki/TCO
-- Eksport/Import CSV
+- Statystyki/TCO + średnie spalanie
+- Tankowania (stacja, litry, cena za litr, przebieg, pełny bak)
+- Trasy (przejechane / planowane)
+- Eksport/Import CSV (do zrobienia osobno)
 - Frontend single-file (INDEX_HTML) — czarno-czerwony motyw, marka/model z listy, paliwo zamiast VIN
 """
 
@@ -152,6 +154,36 @@ CREATE TABLE IF NOT EXISTS service_schedules (
     next_due_date       DATE,
     next_due_mileage    INTEGER,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Tankowania / spalanie
+CREATE TABLE IF NOT EXISTS fuel_logs (
+    id              BIGSERIAL PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    vehicle_id      BIGINT NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+    date            DATE NOT NULL,
+    station         TEXT,
+    liters          NUMERIC NOT NULL,
+    price_per_liter NUMERIC NOT NULL,
+    total_cost      NUMERIC,
+    odometer        INTEGER,
+    full_tank       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Trasy (realne / planowane)
+CREATE TABLE IF NOT EXISTS trips (
+    id              BIGSERIAL PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    vehicle_id      BIGINT NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+    start_date      DATE NOT NULL,
+    end_date        DATE,
+    start_location  TEXT,
+    end_location    TEXT,
+    distance_km     NUMERIC,
+    planned         BOOLEAN NOT NULL DEFAULT FALSE,
+    notes           TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
 
@@ -727,6 +759,205 @@ def delete_schedule(sid):
     return jsonify({"ok": True})
 
 
+# --- Tankowania ---
+
+
+@app.get("/api/fuel_logs")
+@login_required
+def list_fuel_logs():
+    require_db()
+    vehicle_id = request.args.get("vehicle_id", type=int)
+    params = {"uid": session["user_id"]}
+    sql = (
+        "SELECT f.* FROM fuel_logs f "
+        "JOIN vehicles v ON v.id=f.vehicle_id "
+        "WHERE v.owner_id=:uid"
+    )
+    if vehicle_id:
+        sql += " AND f.vehicle_id=:vid"
+        params["vid"] = vehicle_id
+    sql += " ORDER BY f.date DESC, f.id DESC"
+    with ENGINE.begin() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.post("/api/fuel_logs")
+@login_required
+def add_fuel_log():
+    require_db()
+    d = request.get_json() or {}
+    try:
+        vehicle_id = int(d.get("vehicle_id") or 0)
+    except Exception:
+        return jsonify({"error": "vehicle_id_required"}), 400
+
+    if not vehicle_id:
+        return jsonify({"error": "vehicle_id_required"}), 400
+
+    date_s = d.get("date") or date.today().isoformat()
+    station = (d.get("station") or "").strip()
+    try:
+        liters = float(d.get("liters") or 0)
+        price = float(d.get("price_per_liter") or 0)
+    except Exception:
+        return jsonify({"error": "bad_number"}), 400
+
+    if liters <= 0 or price <= 0:
+        return jsonify({"error": "missing_fields"}), 400
+
+    total_cost = d.get("total_cost")
+    try:
+        total_cost = float(total_cost) if total_cost is not None else liters * price
+    except Exception:
+        total_cost = liters * price
+
+    odometer = d.get("odometer")
+    try:
+        odometer = int(odometer) if odometer not in (None, "") else None
+    except Exception:
+        odometer = None
+
+    full_tank = bool(d.get("full_tank"))
+
+    with ENGINE.begin() as conn:
+        # opcjonalna walidacja czy auto należy do usera
+        owner_id = conn.execute(
+            text("SELECT owner_id FROM vehicles WHERE id=:vid"),
+            {"vid": vehicle_id},
+        ).scalar()
+        if not owner_id or int(owner_id) != int(session["user_id"]):
+            return jsonify({"error": "forbidden"}), 403
+
+        conn.execute(
+            text(
+                """
+            INSERT INTO fuel_logs
+            (user_id,vehicle_id,date,station,liters,price_per_liter,total_cost,odometer,full_tank,created_at)
+            VALUES (:uid,:vid,:dt,:st,:lit,:ppl,:tc,:odo,:full,NOW())
+        """
+            ),
+            {
+                "uid": session["user_id"],
+                "vid": vehicle_id,
+                "dt": date_s,
+                "st": station,
+                "lit": liters,
+                "ppl": price,
+                "tc": total_cost,
+                "odo": odometer,
+                "full": full_tank,
+            },
+        )
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/fuel_logs/<int:fid>")
+@login_required
+def delete_fuel_log(fid):
+    require_db()
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text(
+                "DELETE FROM fuel_logs WHERE id=:fid AND user_id=:uid"
+            ),
+            {"fid": fid, "uid": session["user_id"]},
+        )
+    return jsonify({"ok": True})
+
+
+# --- Trasy ---
+
+
+@app.get("/api/trips")
+@login_required
+def list_trips():
+    require_db()
+    vehicle_id = request.args.get("vehicle_id", type=int)
+    params = {"uid": session["user_id"]}
+    sql = (
+        "SELECT t.* FROM trips t "
+        "JOIN vehicles v ON v.id=t.vehicle_id "
+        "WHERE v.owner_id=:uid"
+    )
+    if vehicle_id:
+        sql += " AND t.vehicle_id=:vid"
+        params["vid"] = vehicle_id
+    sql += " ORDER BY t.start_date DESC, t.id DESC"
+    with ENGINE.begin() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.post("/api/trips")
+@login_required
+def add_trip():
+    require_db()
+    d = request.get_json() or {}
+    try:
+        vehicle_id = int(d.get("vehicle_id") or 0)
+    except Exception:
+        return jsonify({"error": "vehicle_id_required"}), 400
+
+    if not vehicle_id:
+        return jsonify({"error": "vehicle_id_required"}), 400
+
+    start_date = d.get("start_date") or date.today().isoformat()
+    end_date = d.get("end_date") or None
+    start_location = (d.get("start_location") or "").strip()
+    end_location = (d.get("end_location") or "").strip()
+    notes = (d.get("notes") or "").strip()
+
+    try:
+        distance_km = float(d.get("distance_km") or 0) or None
+    except Exception:
+        distance_km = None
+
+    planned = bool(d.get("planned"))
+
+    with ENGINE.begin() as conn:
+        owner_id = conn.execute(
+            text("SELECT owner_id FROM vehicles WHERE id=:vid"),
+            {"vid": vehicle_id},
+        ).scalar()
+        if not owner_id or int(owner_id) != int(session["user_id"]):
+            return jsonify({"error": "forbidden"}), 403
+
+        conn.execute(
+            text(
+                """
+            INSERT INTO trips
+            (user_id,vehicle_id,start_date,end_date,start_location,end_location,distance_km,planned,notes,created_at)
+            VALUES (:uid,:vid,:sd,:ed,:sl,:el,:dist,:plan,:notes,NOW())
+        """
+            ),
+            {
+                "uid": session["user_id"],
+                "vid": vehicle_id,
+                "sd": start_date,
+                "ed": end_date,
+                "sl": start_location,
+                "el": end_location,
+                "dist": distance_km,
+                "plan": planned,
+                "notes": notes,
+            },
+        )
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/trips/<int:tid>")
+@login_required
+def delete_trip(tid):
+    require_db()
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text("DELETE FROM trips WHERE id=:tid AND user_id=:uid"),
+            {"tid": tid, "uid": session["user_id"]},
+        )
+    return jsonify({"ok": True})
+
+
 # --- Statystyki / TCO (pomysł #2) ---
 
 
@@ -738,11 +969,12 @@ def stats():
     - by_day: [{ymd, total_cost}]
     - last_mileage: [{vehicle_id, label, mileage}]
     - tco: { total_cost, months, km, cost_per_km, cost_per_month }
+    - fuel_stats: [{ vehicle_id, label, total_liters, distance_km, avg_l_100km }]
     """
     require_db()
     uid = session["user_id"]
     with ENGINE.begin() as conn:
-        # koszty dziennie
+        # koszty dziennie (serwis)
         by_day = (
             conn.execute(
                 text(
@@ -812,6 +1044,29 @@ def stats():
         )
         km = max(0, (max_mil - min_mil))
 
+        # Statystyki spalania z fuel_logs
+        fuel_rows = (
+            conn.execute(
+                text(
+                    """
+                SELECT v.id AS vehicle_id,
+                       (v.make || ' ' || v.model || ' ' || COALESCE(v.reg_plate,'')) AS label,
+                       COALESCE(SUM(f.liters),0) AS total_liters,
+                       MIN(f.odometer) AS min_odo,
+                       MAX(f.odometer) AS max_odo
+                FROM fuel_logs f
+                JOIN vehicles v ON v.id=f.vehicle_id
+                WHERE v.owner_id=:uid
+                GROUP BY v.id, label
+                ORDER BY label ASC
+            """
+                ),
+                {"uid": uid},
+            )
+            .mappings()
+            .all()
+        )
+
     months = 0
     if mi:
         d0 = mi if isinstance(mi, date) else date.fromisoformat(str(mi))
@@ -821,6 +1076,30 @@ def stats():
 
     cost_per_km = float(total_cost) / km if km > 0 else None
     cost_per_month = float(total_cost) / months if months > 0 else None
+
+    fuel_stats = []
+    for r in fuel_rows:
+        min_odo = r["min_odo"]
+        max_odo = r["max_odo"]
+        distance = None
+        if min_odo is not None and max_odo is not None:
+            try:
+                distance = max(0, int(max_odo) - int(min_odo))
+            except Exception:
+                distance = None
+        avg_l_100 = None
+        total_liters = float(r["total_liters"] or 0)
+        if distance and distance > 0 and total_liters > 0:
+            avg_l_100 = total_liters * 100.0 / float(distance)
+        fuel_stats.append(
+            {
+                "vehicle_id": r["vehicle_id"],
+                "label": r["label"],
+                "total_liters": total_liters,
+                "distance_km": distance,
+                "avg_l_100km": avg_l_100,
+            }
+        )
 
     return jsonify(
         {
@@ -833,6 +1112,7 @@ def stats():
                 "cost_per_km": cost_per_km,
                 "cost_per_month": cost_per_month,
             },
+            "fuel_stats": fuel_stats,
         }
     )
 
@@ -1024,6 +1304,73 @@ INDEX_HTML = """
         </table>
       </div>
     </section>
+
+    <!-- Nowa karta: paliwo + trasy -->
+    <section class="card" style="grid-column:1 / span 2;">
+      <h3><i class="bi bi-fuel-pump-fill" style="margin-right:8px;"></i>Paliwo i trasy</h3>
+      <div class="row" style="margin-top:10px;">
+        <!-- Lewa kolumna: tankowania -->
+        <div>
+          <h4>Tankowania</h4>
+          <label>Pojazd</label>
+          <select id="fuel_vehicle" onchange="loadFuelLogs()"></select>
+          <div class="row">
+            <div><label>Data</label><input id="fuel_date" type="date"></div>
+            <div><label>Przebieg (km)</label><input id="fuel_odometer" type="number"></div>
+          </div>
+          <label>Stacja</label><input id="fuel_station" placeholder="np. Orlen, BP, Shell">
+          <div class="row">
+            <div><label>Litry</label><input id="fuel_liters" type="number" step="0.01"></div>
+            <div><label>Cena za litr (PLN)</label><input id="fuel_price" type="number" step="0.01"></div>
+          </div>
+          <label><input type="checkbox" id="fuel_full" style="width:auto;display:inline-block;margin-right:6px;"> Pełny bak</label>
+          <div style="margin-top:8px;"><button type="button" class="primary" onclick="addFuelLog()">Zapisz tankowanie</button></div>
+
+          <h4 style="margin-top:16px;">Historia tankowań</h4>
+          <div style="max-height:260px;overflow:auto;">
+            <table>
+              <thead><tr><th>Data</th><th>Stacja</th><th>Litry</th><th>PLN/l</th><th>Kwota</th><th>Przebieg</th><th>Pełny</th><th></th></tr></thead>
+              <tbody id="fuelTbody"></tbody>
+            </table>
+          </div>
+
+          <h4 style="margin-top:16px;">Średnie spalanie (z tankowań)</h4>
+          <table>
+            <thead><tr><th>Pojazd</th><th>Litry</th><th>Dystans (km)</th><th>Śr. l/100 km</th></tr></thead>
+            <tbody id="fuelSummaryTbody"></tbody>
+          </table>
+        </div>
+
+        <!-- Prawa kolumna: trasy -->
+        <div>
+          <h4>Trasy</h4>
+          <label>Pojazd</label>
+          <select id="trip_vehicle" onchange="loadTrips()"></select>
+          <div class="row">
+            <div><label>Data startu</label><input id="trip_start_date" type="date"></div>
+            <div><label>Data końca (opcjonalnie)</label><input id="trip_end_date" type="date"></div>
+          </div>
+          <div class="row">
+            <div><label>Start (miejsce)</label><input id="trip_start_loc" placeholder="np. Warszawa"></div>
+            <div><label>Cel (miejsce)</label><input id="trip_end_loc" placeholder="np. Kraków"></div>
+          </div>
+          <div class="row">
+            <div><label>Dystans (km)</label><input id="trip_distance" type="number" step="0.1" placeholder="np. 300"></div>
+            <div><label><input type="checkbox" id="trip_planned" style="width:auto;display:inline-block;margin-right:6px;"> Planowana trasa</label></div>
+          </div>
+          <label>Notatki</label><textarea id="trip_notes" rows="3" placeholder="Np. autostrada A2, objazd, itp."></textarea>
+          <div style="margin-top:8px;"><button type="button" class="primary" onclick="addTrip()">Zapisz trasę</button></div>
+
+          <h4 style="margin-top:16px;">Lista tras</h4>
+          <div style="max-height:260px;overflow:auto;">
+            <table>
+              <thead><tr><th>Data</th><th>Trasa</th><th>Dystans (km)</th><th>Status</th><th></th></tr></thead>
+              <tbody id="tripTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <section class="card" style="margin:0 calc(var(--pad)*1.5) calc(var(--pad)*1.5);">
@@ -1033,7 +1380,7 @@ INDEX_HTML = """
        Statystyki
        </h3>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-        <label style="margin:0;align-self:center;">Zakres dni:</label>
+        <label style="margin:0;align-self:center;">Zakres dni (serwis):</label>
         <select id="dash_range" onchange="loadStats()" style="max-width:220px;">
           <option value="7">Ostatnie 7 dni</option>
           <option value="30" selected>Ostatnie 30 dni</option>
@@ -1305,6 +1652,7 @@ INDEX_HTML = """
         $('authBtn').style.display='none'; $('logoutBtn').style.display='inline-block'; closeAuthModal();
         window.loggedIn = true;
         await loadVehicles(); await loadReminderVehicles(); await refreshEntries(); await loadStats(); await loadReminders(); await loadSchedules();
+        await loadFuelLogs(); await loadTrips();
         populateYears();
       } catch(e) { alert('Błędne dane logowania.'); }
     }
@@ -1313,15 +1661,30 @@ INDEX_HTML = """
     // ====== Pojazdy ======
     async function loadVehicles(){
       const list = await api('/api/vehicles');
-      const sel = $('vehicleSelect'), rsel = $('r_vehicle'), ssel = $('s_vehicle');
-      sel.innerHTML=''; if(rsel) rsel.innerHTML='<option value="">—</option>'; if(ssel) ssel.innerHTML='<option value="">—</option>';
+      const sel = $('vehicleSelect'),
+            rsel = $('r_vehicle'),
+            ssel = $('s_vehicle'),
+            fsel = $('fuel_vehicle'),
+            tsel = $('trip_vehicle');
+      sel.innerHTML='';
+      if(rsel) rsel.innerHTML='<option value="">—</option>';
+      if(ssel) ssel.innerHTML='<option value="">—</option>';
+      if(fsel) fsel.innerHTML='<option value="">— wybierz —</option>';
+      if(tsel) tsel.innerHTML='<option value="">— wybierz —</option>';
+
       list.forEach(v => {
         const label = (v.make + ' ' + v.model + ' ' + (v.year||'') + (v.fuel?(' • '+v.fuel):'') + ' ' + (v.reg_plate||'')).trim();
         const o = document.createElement('option'); o.value = v.id; o.textContent = label; sel.appendChild(o);
         if(rsel){ const o2 = document.createElement('option'); o2.value = v.id; o2.textContent = label; rsel.appendChild(o2); }
         if(ssel){ const o3 = document.createElement('option'); o3.value = v.id; o3.textContent = label; ssel.appendChild(o3); }
+        if(fsel){ const o4 = document.createElement('option'); o4.value = v.id; o4.textContent = label; fsel.appendChild(o4); }
+        if(tsel){ const o5 = document.createElement('option'); o5.value = v.id; o5.textContent = label; tsel.appendChild(o5); }
       });
-      if(list.length) sel.value = String(list[0].id);
+      if(list.length) {
+        sel.value = String(list[0].id);
+        if(fsel && !fsel.value) fsel.value = String(list[0].id);
+        if(tsel && !tsel.value) tsel.value = String(list[0].id);
+      }
     }
     async function addVehicle(){
       const { make, model } = getSelectedMakeModel();
@@ -1333,13 +1696,13 @@ INDEX_HTML = """
         reg_plate: $('reg_plate').value
       };
       await api('/api/vehicles', { method:'POST', body: JSON.stringify(body), headers:{'Content-Type':'application/json'} });
-      toast('Dodano pojazd'); await loadVehicles(); await loadStats(); await loadReminders(); await loadSchedules();
+      toast('Dodano pojazd'); await loadVehicles(); await loadStats(); await loadReminders(); await loadSchedules(); await loadFuelLogs(); await loadTrips();
     }
     async function deleteSelectedVehicle(){
       const sel = $('vehicleSelect'); if(!sel.value) return alert('Wybierz pojazd');
       if(!confirm('Usunąć wybrany pojazd wraz z wpisami?')) return;
       await api('/api/vehicles/' + sel.value, {method:'DELETE'});
-      toast('Usunięto pojazd'); await loadVehicles(); await loadStats(); await loadReminders(); await refreshEntries(); await loadSchedules();
+      toast('Usunięto pojazd'); await loadVehicles(); await loadStats(); await loadReminders(); await refreshEntries(); await loadSchedules(); await loadFuelLogs(); await loadTrips();
     }
 
     // ====== Wpisy ======
@@ -1400,6 +1763,108 @@ INDEX_HTML = """
       await loadStats();
     }
 
+    // ====== Tankowania (frontend) ======
+    async function loadFuelLogs(){
+      const sel = $('fuel_vehicle');
+      if(!sel) return;
+      const vid = sel.value || '';
+      const params = new URLSearchParams();
+      if(vid) params.set('vehicle_id', vid);
+      let list = [];
+      try { list = await api('/api/fuel_logs?' + params.toString()); } catch(e){ return; }
+      const tb = $('fuelTbody'); if(!tb) return;
+      tb.innerHTML = '';
+      list.forEach(f => {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>'+ onlyDate(f.date) +'</td>' +
+          '<td>'+ (f.station || '') +'</td>' +
+          '<td>'+ (f.liters != null ? Number(f.liters).toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) : '') +'</td>' +
+          '<td>'+ (f.price_per_liter != null ? Number(f.price_per_liter).toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) : '') +'</td>' +
+          '<td>'+ (f.total_cost != null ? Number(f.total_cost).toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) : '') +'</td>' +
+          '<td>'+ (f.odometer != null ? Number(f.odometer).toLocaleString('pl-PL') : '') +'</td>' +
+          '<td>'+ (f.full_tank ? 'tak' : 'nie') +'</td>' +
+          '<td class="actions"><button type="button" onclick="deleteFuelLog('+f.id+')">Usuń</button></td>';
+        tb.appendChild(tr);
+      });
+    }
+    async function addFuelLog(){
+      const vid = $('fuel_vehicle').value;
+      if(!vid) return alert('Wybierz pojazd dla tankowania.');
+      const body = {
+        vehicle_id: vid,
+        date: $('fuel_date').value || null,
+        station: $('fuel_station').value || null,
+        liters: $('fuel_liters').value || null,
+        price_per_liter: $('fuel_price').value || null,
+        odometer: $('fuel_odometer').value || null,
+        full_tank: $('fuel_full').checked
+      };
+      await api('/api/fuel_logs', { method:'POST', body: JSON.stringify(body), headers:{'Content-Type':'application/json'} });
+      toast('Zapisano tankowanie');
+      $('fuel_station').value=''; $('fuel_liters').value=''; $('fuel_price').value=''; $('fuel_odometer').value=''; $('fuel_full').checked=true;
+      await loadFuelLogs(); await loadStats();
+    }
+    async function deleteFuelLog(id){
+      if(!confirm('Usunąć wpis tankowania?')) return;
+      await api('/api/fuel_logs/' + id, { method:'DELETE' });
+      toast('Usunięto tankowanie');
+      await loadFuelLogs(); await loadStats();
+    }
+
+    // ====== Trasy (frontend) ======
+    async function loadTrips(){
+      const sel = $('trip_vehicle');
+      if(!sel) return;
+      const vid = sel.value || '';
+      const params = new URLSearchParams();
+      if(vid) params.set('vehicle_id', vid);
+      let list = [];
+      try { list = await api('/api/trips?' + params.toString()); } catch(e){ return; }
+      const tb = $('tripTbody'); if(!tb) return;
+      tb.innerHTML = '';
+      list.forEach(t => {
+        const dateStr = onlyDate(t.start_date) + (t.end_date ? ' - ' + onlyDate(t.end_date) : '');
+        const route = (t.start_location || '') + (t.end_location ? ' → ' + t.end_location : '');
+        const dist = (t.distance_km != null ? Number(t.distance_km).toLocaleString('pl-PL',{maximumFractionDigits:1}) : '');
+        const status = t.planned ? 'planowana' : 'zrealizowana';
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>'+dateStr+'</td>' +
+          '<td>'+route+'</td>' +
+          '<td>'+dist+'</td>' +
+          '<td>'+status+'</td>' +
+          '<td class="actions"><button type="button" onclick="deleteTrip('+t.id+')">Usuń</button></td>';
+        tb.appendChild(tr);
+      });
+    }
+    async function addTrip(){
+      const vid = $('trip_vehicle').value;
+      if(!vid) return alert('Wybierz pojazd dla trasy.');
+      const body = {
+        vehicle_id: vid,
+        start_date: $('trip_start_date').value || null,
+        end_date: $('trip_end_date').value || null,
+        start_location: $('trip_start_loc').value || null,
+        end_location: $('trip_end_loc').value || null,
+        distance_km: $('trip_distance').value || null,
+        planned: $('trip_planned').checked,
+        notes: $('trip_notes').value || null
+      };
+      await api('/api/trips', { method:'POST', body: JSON.stringify(body), headers:{'Content-Type':'application/json'} });
+      toast('Zapisano trasę');
+      $('trip_start_date').value=''; $('trip_end_date').value='';
+      $('trip_start_loc').value=''; $('trip_end_loc').value='';
+      $('trip_distance').value=''; $('trip_planned').checked=false; $('trip_notes').value='';
+      await loadTrips();
+    }
+    async function deleteTrip(id){
+      if(!confirm('Usunąć trasę?')) return;
+      await api('/api/trips/' + id, { method:'DELETE' });
+      toast('Usunięto trasę');
+      await loadTrips();
+    }
+
     // ====== Statystyki ======
     const BarValueLabels = {
       id: 'barValueLabels',
@@ -1443,7 +1908,7 @@ INDEX_HTML = """
           sumsByVehicle[v.id] = 0;
         });
 
-        // sumy kosztów per pojazd w zadanym zakresie dni
+        // sumy kosztów per pojazd w zadanym zakresie dni (serwis)
         (allEntries || []).forEach(e => {
           if (!labelsByVehicle[e.vehicle_id]) return;
           if (cut) {
@@ -1520,6 +1985,31 @@ INDEX_HTML = """
             tb.appendChild(tr);
           });
         }
+
+        // ====== Średnie spalanie (fuel_stats) ======
+        const fsBody = $('fuelSummaryTbody');
+        if(fsBody){
+          fsBody.innerHTML = '';
+          (s.fuel_stats || []).forEach(row => {
+            const color = getVehicleColor(row.vehicle_id);
+            const tr = document.createElement('tr');
+            tr.style.borderLeft = '4px solid ' + color;
+            const avg = row.avg_l_100km != null
+              ? Number(row.avg_l_100km).toLocaleString('pl-PL',{minimumFractionDigits:1, maximumFractionDigits:1})
+              : '-';
+            const dist = row.distance_km != null
+              ? Number(row.distance_km).toLocaleString('pl-PL',{maximumFractionDigits:0})
+              : '-';
+            const liters = Number(row.total_liters || 0).toLocaleString('pl-PL',{minimumFractionDigits:1, maximumFractionDigits:1});
+            tr.innerHTML =
+              '<td>'+ (row.label || '-') +'</td>' +
+              '<td>'+ liters +'</td>' +
+              '<td>'+ dist +'</td>' +
+              '<td>'+ avg +'</td>';
+            fsBody.appendChild(tr);
+          });
+        }
+
       }catch(e){ console.error(e); }
     }
 
@@ -1606,12 +2096,15 @@ INDEX_HTML = """
       loadStats, loadReminders, loadReminderVehicles,
       addReminder, completeReminder, deleteReminder,
       loadSchedules, addSchedule, deleteSchedule,
-      onMakeChange, enforcePlate
+      onMakeChange, enforcePlate,
+      loadFuelLogs, addFuelLog, deleteFuelLog,
+      loadTrips, addTrip, deleteTrip
     });
   </script>
 </body>
 </html>
 """
+
 
 @app.get("/")
 def index_page():
