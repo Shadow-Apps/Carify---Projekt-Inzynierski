@@ -986,8 +986,6 @@ def delete_trip(tid):
 
 
 # --- Statystyki / TCO ---
-
-
 @app.get("/api/stats")
 @login_required
 def stats():
@@ -1096,22 +1094,24 @@ def stats():
         )
         km = max(0, (max_mil - min_mil))
 
-        # Statystyki spalania z fuel_logs
-        fuel_rows = (
+        # SZCZEGÓŁOWE tankowania — do liczenia spalania na podstawie pełnych baków
+        fuel_detail_rows = (
             conn.execute(
                 text(
                     """
-                SELECT v.id AS vehicle_id,
-                       (v.make || ' ' || v.model || ' ' || COALESCE(v.reg_plate,'')) AS label,
-                       COALESCE(SUM(f.liters),0) AS total_liters,
-                       MIN(f.odometer) AS min_odo,
-                       MAX(f.odometer) AS max_odo
-                FROM fuel_logs f
-                JOIN vehicles v ON v.id=f.vehicle_id
-                WHERE v.owner_id=:uid
-                GROUP BY v.id, label
-                ORDER BY label ASC
-            """
+                    SELECT
+                        v.id AS vehicle_id,
+                        (v.make || ' ' || v.model || ' ' || COALESCE(v.reg_plate,'')) AS label,
+                        f.date,
+                        f.odometer,
+                        f.liters,
+                        f.full_tank
+                    FROM fuel_logs f
+                    JOIN vehicles v ON v.id = f.vehicle_id
+                    WHERE v.owner_id = :uid
+                      AND f.odometer IS NOT NULL   -- bez przebiegu nie liczymy
+                    ORDER BY v.id, f.date, f.id
+                    """
                 ),
                 {"uid": uid},
             )
@@ -1159,6 +1159,7 @@ def stats():
             .all()
         )
 
+    # czas eksploatacji w miesiącach (do TCO / miesiąc)
     months = 0
     if mi:
         d0 = mi if isinstance(mi, date) else date.fromisoformat(str(mi))
@@ -1169,29 +1170,86 @@ def stats():
     cost_per_km = float(total_cost) / km if km > 0 else None
     cost_per_month = float(total_cost) / months if months > 0 else None
 
+    # ====== NOWE liczenie średniego spalania ======
+    # Metoda: tylko odcinki między dwoma pełnymi bakami,
+    # a litry = suma wszystkich tankowań (pełne + częściowe) między tymi pełnymi.
     fuel_stats = []
-    for r in fuel_rows:
-        min_odo = r["min_odo"]
-        max_odo = r["max_odo"]
-        distance = None
-        if min_odo is not None and max_odo is not None:
-            try:
-                distance = max(0, int(max_odo) - int(min_odo))
-            except Exception:
-                distance = None
-        avg_l_100 = None
-        total_liters = float(r["total_liters"] or 0)
-        if distance and distance > 0 and total_liters > 0:
-            avg_l_100 = total_liters * 100.0 / float(distance)
+
+    current_vehicle_id = None
+    current_label = None
+    last_full_odo = None          # licznik przy poprzednim pełnym baku
+    liters_since_full = 0.0       # litry od poprzedniego pełnego do teraz
+    total_liters_for_avg = 0.0    # suma litrów użyta do wyliczenia średniego spalania
+    total_distance_for_avg = 0    # suma km z odcinków pomiędzy pełnymi bakami
+
+    def flush_vehicle():
+        """Zapisz wynik dla aktualnego pojazdu do fuel_stats."""
+        nonlocal current_vehicle_id, current_label, total_liters_for_avg, total_distance_for_avg
+        if current_vehicle_id is None:
+            return
+        distance = total_distance_for_avg if total_distance_for_avg > 0 else None
+        avg = None
+        if distance and total_liters_for_avg > 0:
+            avg = total_liters_for_avg * 100.0 / float(distance)
         fuel_stats.append(
             {
-                "vehicle_id": r["vehicle_id"],
-                "label": r["label"],
-                "total_liters": total_liters,
+                "vehicle_id": current_vehicle_id,
+                "label": current_label,
+                "total_liters": float(total_liters_for_avg),
                 "distance_km": distance,
-                "avg_l_100km": avg_l_100,
+                "avg_l_100km": avg,
             }
         )
+
+    for row in fuel_detail_rows:
+        vid = row["vehicle_id"]
+        label = row["label"]
+        odo = row["odometer"]
+        try:
+            odo = int(odo) if odo is not None else None
+        except Exception:
+            odo = None
+
+        try:
+            liters = float(row["liters"] or 0)
+        except Exception:
+            liters = 0.0
+
+        full = bool(row["full_tank"])
+
+        # Zmiana pojazdu – zafinalizuj poprzedni
+        if current_vehicle_id is None:
+            current_vehicle_id = vid
+            current_label = label
+            last_full_odo = None
+            liters_since_full = 0.0
+            total_liters_for_avg = 0.0
+            total_distance_for_avg = 0
+        elif vid != current_vehicle_id:
+            flush_vehicle()
+            current_vehicle_id = vid
+            current_label = label
+            last_full_odo = None
+            liters_since_full = 0.0
+            total_liters_for_avg = 0.0
+            total_distance_for_avg = 0
+
+        # Dodaj litry do bufora od ostatniego pełnego baku
+        liters_since_full += liters
+
+        if full and odo is not None:
+            # Mamy pełny bak — jeżeli to nie jest pierwszy pełny bak, możemy policzyć odcinek
+            if last_full_odo is not None and odo > last_full_odo and liters_since_full > 0:
+                segment_distance = odo - last_full_odo
+                total_distance_for_avg += segment_distance
+                total_liters_for_avg += liters_since_full
+
+            # Ustaw ten pełny bak jako nowy punkt odniesienia
+            last_full_odo = odo
+            liters_since_full = 0.0
+
+    # Zafinalizuj ostatni pojazd
+    flush_vehicle()
 
     # scalone koszty dziennie (serwis + paliwo) - tylko suma per data
     by_day_map = {}
@@ -1220,8 +1278,6 @@ def stats():
             "daily_vehicle_costs": [dict(r) for r in daily_rows],
         }
     )
-
-
 # --- FRONTEND (INDEX_HTML) ---#
 
 INDEX_HTML = """
