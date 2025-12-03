@@ -884,9 +884,25 @@ def list_trips():
         sql += " AND t.vehicle_id=:vid"
         params["vid"] = vehicle_id
     sql += " ORDER BY t.start_date DESC, t.id DESC"
+
     with ENGINE.begin() as conn:
         rows = conn.execute(text(sql), params).mappings().all()
-    return jsonify([dict(r) for r in rows])
+
+    safe = []
+    for r in rows:
+        d = dict(r)
+        # start_date / end_date JSON ogarnia, ale czas NIE ZAWSZE
+        for key in ("start_time", "end_time"):
+            val = d.get(key)
+            if val is not None:
+                # datetime.time → "HH:MM"
+                try:
+                    d[key] = val.strftime("%H:%M")
+                except Exception:
+                    d[key] = str(val)
+        safe.append(d)
+
+    return jsonify(safe)
 
 
 @app.post("/api/trips")
