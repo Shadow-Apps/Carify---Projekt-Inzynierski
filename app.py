@@ -27,6 +27,7 @@ from werkzeug.utils import secure_filename
 
 # --- DB (SQLAlchemy + psycopg) ---
 from sqlalchemy import create_engine, text
+    # user might have from sqlalchemy.exc import SQLAlchemyError import below
 from sqlalchemy.exc import SQLAlchemyError
 
 # --- Konfiguracja ---
@@ -1351,35 +1352,30 @@ INDEX_HTML = """
       font-size:11px;
     }
     .calendar-cell .day-num {
-      font-weight:700;
+      font-weight:600;
       margin-bottom:4px;
-      color:#f9fafb;
     }
     .calendar-cell .cost-total {
       font-size:12px;
       margin-bottom:4px;
     }
     .calendar-cell .entry {
-      font-size:11px;
-      line-height:1.3;
-      margin-top:2px;
-      white-space:normal;
-      overflow:visible;
-      text-overflow:clip;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
     }
-
-    .calendar-tooltip {
+    .calendar-popup {
       position:fixed;
-      z-index:80;
-      background:#111827;
-      border-radius:10px;
-      border:1px solid var(--border);
-      padding:10px 12px;
-      font-size:11px;
-      max-width:260px;
-      box-shadow:var(--sh);
+      background:#1e293b;
+      color:#fff;
+      padding:8px 10px;
+      font-size:12px;
+      border-radius:6px;
+      box-shadow:0 3px 8px rgba(0,0,0,.35);
+      z-index:9999;
       pointer-events:none;
-      display:none;
+      white-space:nowrap;
+      border:1px solid #475569;
     }
   </style>
 </head>
@@ -1402,7 +1398,7 @@ INDEX_HTML = """
   </header>
 
   <main>
-    <!-- POJAZDY -->
+    <!-- Karta: pojazdy -->
     <section class="card">
       <h3>Pojazdy</h3>
       <div>
@@ -1450,63 +1446,26 @@ INDEX_HTML = """
       </div>
     </section>
 
-    <!-- STATYSTYKI + KALENDARZ (widzoczne od razu po Pojazdach) -->
-    <section class="card" style="grid-column:1 / span 2; margin:0;">
+    <!-- Karta: kalendarium kosztów (obok pojazdów) -->
+    <section class="card">
       <div class="tooltray" style="justify-content:space-between;">
         <h3 class="section-title">
-         <i class="bi bi-speedometer2" style="font-size: 1.4rem; margin-right: 8px;"></i>
-         Statystyki
-         </h3>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-          <label style="margin:0;align-self:center;">Zakres dni (dla wykresu):</label>
-          <select id="dash_range" onchange="loadStats()" style="max-width:220px;">
-            <option value="7">Ostatnie 7 dni</option>
-            <option value="30" selected>Ostatnie 30 dni</option>
-            <option value="90">Ostatnie 90 dni</option>
-            <option value="0">Wszystko</option>
-          </select>
+          <i class="bi bi-calendar2-week-fill" style="font-size: 1.4rem; margin-right: 8px;"></i>
+          Kalendarium kosztów
+        </h3>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <label style="margin:0; font-size:12px;">Miesiąc:</label>
+          <input type="month" id="cal_month" onchange="renderCostCalendar()" style="max-width:180px;">
         </div>
       </div>
-
-      <div class="stats-wrap" style="margin-top:10px;">
-        <div>
-          <h4 style="margin:0 0 8px">Koszt wg pojazdu</h4>
-          <canvas id="chartCost"></canvas>
-        </div>
-        <div>
-          <h4 style="margin:0 0 8px">Suma kosztów auta</h4>
-          <table>
-            <thead><tr><th>Pojazd</th><th>Suma (PLN)</th></tr></thead>
-            <tbody id="sumByVehicleTbody"></tbody>
-            <tfoot><tr><th style="text-align:right;">Suma wszystkich</th><th id="sumAll">0,00</th></tr></tfoot>
-          </table>
-          <div style="margin-top:12px;">
-            <h4 style="margin:0 0 8px">Ostatnie przebiegi</h4>
-            <table>
-              <thead><tr><th>Pojazd</th><th>Ostatni przebieg</th></tr></thead>
-              <tbody id="mileageTbody"></tbody>
-            </table>
-          </div>
-        </div>
+      <div class="calendar-weekdays">
+        <span>Pn</span><span>Wt</span><span>Śr</span><span>Cz</span><span>Pt</span><span>Sb</span><span>Nd</span>
       </div>
-
-      <div style="margin-top:16px;">
-        <h4 style="margin:0 0 8px">Kalendarium kosztów (serwis + paliwo)</h4>
-        <div class="tooltray" style="margin-bottom:8px;">
-          <div>
-            <label style="margin:0 8px 0 0; font-size:12px;">Miesiąc:</label>
-            <input type="month" id="cal_month" onchange="renderCostCalendar()" style="max-width:180px;">
-          </div>
-        </div>
-        <div class="calendar-weekdays">
-          <span>Pn</span><span>Wt</span><span>Śr</span><span>Cz</span><span>Pt</span><span>Sb</span><span>Nd</span>
-        </div>
-        <div id="calendarGrid" class="calendar-grid"></div>
-      </div>
+      <div id="calendarGrid" class="calendar-grid"></div>
     </section>
 
-    <!-- WPISY SERWISOWE -->
-    <section class="card">
+    <!-- Karta: wpisy serwisowe – pełna szerokość -->
+    <section class="card" style="grid-column:1 / span 2;">
       <div class="tooltray" style="justify-content:space-between;">
         <h3 style="margin:0;">Wpisy serwisowe</h3>
         <div style="display:flex; gap:8px; align-items:center;">
@@ -1612,6 +1571,54 @@ INDEX_HTML = """
     </section>
   </main>
 
+  <!-- Statystyki na dole strony (bez kalendarza) -->
+  <section class="card" style="margin:0 calc(var(--pad)*1.5) calc(var(--pad)*1.5);">
+    <div class="tooltray" style="justify-content:space-between;">
+      <h3 class="section-title">
+       <i class="bi bi-speedometer2" style="font-size: 1.4rem; margin-right: 8px;"></i>
+       Statystyki
+       </h3>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+        <label style="margin:0;align-self:center;">Zakres dni (dla wykresu):</label>
+        <select id="dash_range" onchange="loadStats()" style="max-width:220px;">
+          <option value="7">Ostatnie 7 dni</option>
+          <option value="30" selected>Ostatnie 30 dni</option>
+          <option value="90">Ostatnie 90 dni</option>
+          <option value="0">Wszystko</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="stats-wrap" style="margin-top:10px;">
+      <div>
+        <h4 style="margin:0 0 8px">Koszt wg pojazdu</h4>
+        <canvas id="chartCost"></canvas>
+      </div>
+      <div>
+        <h4 style="margin:0 0 8px">Suma kosztów auta</h4>
+        <table>
+          <thead><tr><th>Pojazd</th><th>Suma (PLN)</th></tr></thead>
+          <tbody id="sumByVehicleTbody"></tbody>
+          <tfoot><tr><th style="text-align:right;">Suma wszystkich</th><th id="sumAll">0,00</th></tr></tfoot>
+        </table>
+        <div style="margin-top:12px;">
+          <h4 style="margin:0 0 8px">Ostatnie przebiegi</h4>
+          <table>
+            <thead><tr><th>Pojazd</th><th>Ostatni przebieg</th></tr></thead>
+            <tbody id="mileageTbody"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:12px;">
+          <h4 style="margin:0 0 8px">Średnie spalanie (z tankowań)</h4>
+          <table>
+            <thead><tr><th>Pojazd</th><th>Litry</th><th>Dystans (km)</th><th>Śr. l/100 km</th></tr></thead>
+            <tbody id="fuelSummaryTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <div id="authModal" class="modal-backdrop" onclick="backdropClose(event)">
     <div class="modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
       <header>
@@ -1701,7 +1708,6 @@ INDEX_HTML = """
   </div>
 
   <div class="toast" id="toast">✓ Zapisano</div>
-  <div id="calendarTooltip" class="calendar-tooltip"></div>
 
   <script>
     const $ = (id) => document.getElementById(id);
@@ -1709,7 +1715,6 @@ INDEX_HTML = """
     window._entriesCache = [];
     window._dailyVehicleCosts = [];
     let currentUserName = '';
-    let calendarTooltipEl = null;
 
     // ====== Kolory pojazdów ======
     const VEHICLE_COLOR_PALETTE = [
@@ -1731,56 +1736,12 @@ INDEX_HTML = """
       return VEHICLE_COLORS[key];
     }
 
-    // ====== Tooltip kalendarza ======
-    function initCalendarTooltip() {
-      calendarTooltipEl = $('calendarTooltip');
-    }
-
-    function showCalendarTooltip(ev, html) {
-      if (!calendarTooltipEl) return;
-      calendarTooltipEl.innerHTML = html;
-      calendarTooltipEl.style.display = 'block';
-      positionCalendarTooltip(ev);
-    }
-
-    function positionCalendarTooltip(ev) {
-      if (!calendarTooltipEl) return;
-      const offsetX = 14;
-      const offsetY = 18;
-      let x = ev.clientX + offsetX;
-      let y = ev.clientY + offsetY;
-
-      const rect = calendarTooltipEl.getBoundingClientRect();
-      const vw = window.innerWidth || document.documentElement.clientWidth;
-      const vh = window.innerHeight || document.documentElement.clientHeight;
-
-      if (x + rect.width + 8 > vw) {
-        x = ev.clientX - rect.width - offsetX;
-      }
-      if (y + rect.height + 8 > vh) {
-        y = ev.clientY - rect.height - offsetY;
-      }
-
-      calendarTooltipEl.style.left = x + 'px';
-      calendarTooltipEl.style.top = y + 'px';
-    }
-
-    function moveCalendarTooltip(ev) {
-      if (!calendarTooltipEl || calendarTooltipEl.style.display !== 'block') return;
-      positionCalendarTooltip(ev);
-    }
-
-    function hideCalendarTooltip() {
-      if (!calendarTooltipEl) return;
-      calendarTooltipEl.style.display = 'none';
-    }
-
-       // ====== Daty / godziny po polsku ======
+    // ====== Daty / godziny po polsku ======
     function formatDatePl(value) {
       if (!value) return '';
-
+    
       const s = String(value).trim();
-
+    
       // Spróbuj potraktować to jako datę JS
       const d = new Date(s);
       if (!isNaN(d.getTime())) {
@@ -1789,7 +1750,7 @@ INDEX_HTML = """
         const yyyy = d.getFullYear();
         return dd + '.' + mm + '.' + yyyy; // DD.MM.RRRR
       }
-
+    
       // Fallback: tekst w formacie YYYY-MM-DD
       if (s.length >= 10 && s[4] === '-' && s[7] === '-') {
         const yyyy = s.slice(0, 4);
@@ -1797,16 +1758,22 @@ INDEX_HTML = """
         const dd = s.slice(8, 10);
         return dd + '.' + mm + '.' + yyyy;
       }
-
+    
       return s;
     }
-
+    
     function formatTimeHm(value) {
       if (!value) return '';
       const s = String(value);
       return s.slice(0, 5); // HH:MM
     }
 
+    function onlyDate(value) {
+      if (!value) return '';
+      const s = String(value);
+      if (s.length >= 10) return s.slice(0, 10);
+      return s;
+    }
 
     function pad2(n){ return n < 10 ? '0' + n : String(n); }
 
@@ -2004,7 +1971,7 @@ INDEX_HTML = """
     function editEntry(id){
       const e = (window._entriesCache||[]).find(x => String(x.id) === String(id)); if(!e) return;
       editEntryId = id;
-      $('date').value = e.date ? String(e.date).slice(0,10) : '';
+      $('date').value = onlyDate(e.date) || '';
       $('mileage').value = e.mileage || '';
       $('service_type').value = e.service_type || ''; $('description').value = e.description || ''; $('cost').value = e.cost || '';
       document.querySelector('button.primary').textContent = 'Zapisz zmiany';
@@ -2304,7 +2271,7 @@ INDEX_HTML = """
           });
         }
 
-        // ====== Kalendarz kosztów ======
+        // ====== Kalendarz kosztów (osobna karta) ======
         const monthInput = $('cal_month');
         if (monthInput && !monthInput.value) {
           const now = new Date();
@@ -2332,6 +2299,7 @@ INDEX_HTML = """
         const now = new Date();
         year = now.getFullYear();
         month = now.getMonth() + 1;
+        if (monthInput) monthInput.value = now.toISOString().slice(0,7);
       }
 
       const daysInMonth = new Date(year, month, 0).getDate();
@@ -2380,44 +2348,39 @@ INDEX_HTML = """
             const service = Number(r.service_cost || 0);
             const fuel = Number(r.fuel_cost || 0);
             let details = '';
-            if (service > 0) {
-              details += 'serwis ' + service.toLocaleString('pl-PL',{maximumFractionDigits:2}) + ' zł';
-            }
+            if (service > 0) details += 'serwis ' + service.toLocaleString('pl-PL',{maximumFractionDigits:2}) + ' zł';
             if (fuel > 0) {
               if (details) details += ', ';
               details += 'paliwo ' + fuel.toLocaleString('pl-PL',{maximumFractionDigits:2}) + ' zł';
             }
+            entry.textContent = '• ' + (r.label || '-') + ' — ' + details;
 
-            // Tekst w komórce
-            entry.textContent = (r.label || '-') + ' — ' + details;
-
-            // Kolor obok wpisu (taki jak w statystykach)
             const color = getVehicleColor(r.vehicle_id);
             entry.style.borderLeft = '3px solid ' + color;
             entry.style.paddingLeft = '6px';
 
-            // HTML do tooltipa
-            const detailHtml =
-              '<div style="font-weight:600; margin-bottom:4px; color:#f9fafb;">' + (r.label || '-') + '</div>' +
-              '<div style="font-size:11px; margin-bottom:2px;">Data: ' + formatDatePl(ymd) + '</div>' +
-              (service > 0 ? '<div style="font-size:11px;">Serwis: <strong>' +
-                service.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) +
-                ' zł</strong></div>' : '') +
-              (fuel > 0 ? '<div style="font-size:11px;">Paliwo: <strong>' +
-                fuel.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) +
-                ' zł</strong></div>' : '') +
-              '<div style="font-size:11px; margin-top:4px; color:#9ca3af;">Łączny koszt dnia: ' +
-              totalForDay.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) +
-              ' zł</div>';
+            entry.addEventListener('mouseenter', () => {
+              const popup = document.createElement('div');
+              popup.className = 'calendar-popup';
+              const total = Number(r.total_cost || (service + fuel));
+              popup.innerHTML =
+                '<strong>' + (r.label || '-') + '</strong><br>' +
+                'Data: ' + formatDatePl(ymd) + '<br>' +
+                'Serwis: ' + service.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) + ' zł<br>' +
+                'Paliwo: ' + fuel.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) + ' zł<br>' +
+                'Razem: ' + total.toLocaleString('pl-PL',{minimumFractionDigits:2, maximumFractionDigits:2}) + ' zł';
+              document.body.appendChild(popup);
+              const rect = entry.getBoundingClientRect();
+              popup.style.top = (rect.bottom + 4) + 'px';
+              popup.style.left = rect.left + 'px';
+              entry._popup = popup;
+            });
 
-            entry.addEventListener('mouseenter', function(ev){
-              showCalendarTooltip(ev, detailHtml);
-            });
-            entry.addEventListener('mousemove', function(ev){
-              moveCalendarTooltip(ev);
-            });
-            entry.addEventListener('mouseleave', function(){
-              hideCalendarTooltip();
+            entry.addEventListener('mouseleave', () => {
+              if (entry._popup) {
+                entry._popup.remove();
+                entry._popup = null;
+              }
             });
 
             cell.appendChild(entry);
@@ -2505,11 +2468,7 @@ INDEX_HTML = """
     async function deleteSchedule(id){ await api('/api/schedules/' + id, { method:'DELETE' }); await loadSchedules(); }
 
     // ====== Init ======
-    document.addEventListener('DOMContentLoaded', () => {
-      populateMakes();
-      populateYears();
-      initCalendarTooltip();
-    });
+    document.addEventListener('DOMContentLoaded', () => { populateMakes(); populateYears(); });
 
     Object.assign(window, {
       openAuthModal, closeAuthModal, openReminders, closeReminders, openSchedules, closeSchedules, backdropClose,
